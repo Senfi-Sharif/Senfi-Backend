@@ -15,14 +15,15 @@ from .serializers import PendingCampaignSerializer
 from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnly
 from rest_framework import status as drf_status
 from django.utils import timezone
-from .models import CampaignSignature, User
-from .serializers import CampaignSignatureSerializer
+from .models import CampaignSignature, User, BlogPost
+from .serializers import CampaignSignatureSerializer, BlogPostSerializer, BlogPostListSerializer
 from django_ratelimit.decorators import ratelimit
 from .utils import log_security_event, log_data_access, log_admin_action
 from .performance import performance_monitor
 from rest_framework.exceptions import ValidationError
 import logging
 import sys
+from django.db import models
 
 # Security logger
 security_logger = logging.getLogger('security')
@@ -688,17 +689,209 @@ class SystemMetricsView(APIView):
     permission_classes = [IsAuthenticated]
     
     def get(self, request):
-        if request.user.role not in ["superadmin", "head"]:
-            return Response({"success": False, "detail": "دسترسی ندارید."}, status=403)
+        if request.user.role not in ['superadmin', 'head', 'center_member']:
+            return Response({"detail": "Access denied"}, status=403)
         
-        hours = request.query_params.get('hours', 24)
         try:
-            hours = int(hours)
-        except ValueError:
-            hours = 24
+            import psutil
+            cpu_percent = psutil.cpu_percent(interval=1)
+            memory = psutil.virtual_memory()
+            disk = psutil.disk_usage('/')
+            
+            metrics = {
+                'cpu_percent': cpu_percent,
+                'memory_percent': memory.percent,
+                'memory_available_gb': round(memory.available / (1024**3), 2),
+                'disk_percent': disk.percent,
+                'disk_free_gb': round(disk.free / (1024**3), 2)
+            }
+            
+            return Response(metrics)
+        except ImportError:
+            return Response({"detail": "psutil not available"}, status=500)
+
+# BlogPost Views
+class BlogPostListView(APIView):
+    """
+    Get list of published blog posts
+    
+    Returns published blog posts with pagination.
+    Public endpoint - no authentication required.
+    """
+    permission_classes = [permissions.AllowAny]
+    
+    def get(self, request):
+        try:
+            # Get query parameters
+            page = int(request.GET.get('page', 1))
+            page_size = int(request.GET.get('page_size', 10))
+            category = request.GET.get('category', '')
+            search = request.GET.get('search', '')
+            
+            # Filter published posts
+            queryset = BlogPost.objects.filter(is_published=True)
+            
+            # Apply filters
+            if category:
+                queryset = queryset.filter(category=category)
+            
+            if search:
+                queryset = queryset.filter(
+                    models.Q(title__icontains=search) |
+                    models.Q(content__icontains=search) |
+                    models.Q(excerpt__icontains=search)
+                )
+            
+            # Pagination
+            total_count = queryset.count()
+            start = (page - 1) * page_size
+            end = start + page_size
+            posts = queryset[start:end]
+            
+            serializer = BlogPostListSerializer(posts, many=True)
+            
+            return Response({
+                'posts': serializer.data,
+                'pagination': {
+                    'page': page,
+                    'page_size': page_size,
+                    'total_count': total_count,
+                    'total_pages': (total_count + page_size - 1) // page_size
+                }
+            })
+        except Exception as e:
+            return Response({"detail": str(e)}, status=500)
+
+class BlogPostDetailView(APIView):
+    """
+    Get single blog post by slug
+    
+    Returns detailed blog post information.
+    Public endpoint - no authentication required.
+    """
+    permission_classes = [permissions.AllowAny]
+    
+    def get(self, request, slug):
+        try:
+            post = BlogPost.objects.get(slug=slug, is_published=True)
+            serializer = BlogPostSerializer(post)
+            return Response(serializer.data)
+        except BlogPost.DoesNotExist:
+            return Response({"detail": "Blog post not found"}, status=404)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=500)
+
+class BlogPostCreateView(APIView):
+    """
+    Create new blog post
+    
+    Creates a new blog post. Only superadmin can create posts.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        if request.user.role != 'superadmin':
+            return Response({"detail": "Only superadmin can create blog posts"}, status=403)
         
-        metrics = performance_monitor.get_system_metrics(hours)
-        return Response({
-            "success": True,
-            "system_metrics": metrics
-        })
+        try:
+            serializer = BlogPostSerializer(data=request.data)
+            if serializer.is_valid():
+                # Set author to current user
+                serializer.save(author=request.user)
+                return Response(serializer.data, status=201)
+            return Response(serializer.errors, status=400)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=500)
+
+class BlogPostUpdateView(APIView):
+    """
+    Update blog post
+    
+    Updates an existing blog post. Only superadmin can update posts.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def put(self, request, post_id):
+        if request.user.role != 'superadmin':
+            return Response({"detail": "Only superadmin can update blog posts"}, status=403)
+        
+        try:
+            post = BlogPost.objects.get(id=post_id)
+            serializer = BlogPostSerializer(post, data=request.data, partial=True)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data)
+            return Response(serializer.errors, status=400)
+        except BlogPost.DoesNotExist:
+            return Response({"detail": "Blog post not found"}, status=404)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=500)
+
+class BlogPostDeleteView(APIView):
+    """
+    Delete blog post
+    
+    Deletes a blog post. Only superadmin can delete posts.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def delete(self, request, post_id):
+        if request.user.role != 'superadmin':
+            return Response({"detail": "Only superadmin can delete blog posts"}, status=403)
+        
+        try:
+            post = BlogPost.objects.get(id=post_id)
+            post.delete()
+            return Response({"detail": "Blog post deleted successfully"})
+        except BlogPost.DoesNotExist:
+            return Response({"detail": "Blog post not found"}, status=404)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=500)
+
+class BlogPostAdminListView(APIView):
+    """
+    Get all blog posts for admin management
+    
+    Returns all blog posts (published and unpublished) for admin management.
+    Only superadmin can access.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        if request.user.role != 'superadmin':
+            return Response({"detail": "Only superadmin can access admin blog list"}, status=403)
+        
+        try:
+            posts = BlogPost.objects.all().order_by('-created_at')
+            serializer = BlogPostSerializer(posts, many=True)
+            return Response(serializer.data)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=500)
+
+class BlogPostPublishView(APIView):
+    """
+    Publish or unpublish blog post
+    
+    Toggles the published status of a blog post.
+    Only superadmin can publish/unpublish posts.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request, post_id):
+        if request.user.role != 'superadmin':
+            return Response({"detail": "Only superadmin can publish/unpublish blog posts"}, status=403)
+        
+        try:
+            post = BlogPost.objects.get(id=post_id)
+            post.is_published = not post.is_published
+            
+            if post.is_published and not post.published_at:
+                post.published_at = timezone.now()
+            
+            post.save()
+            serializer = BlogPostSerializer(post)
+            return Response(serializer.data)
+        except BlogPost.DoesNotExist:
+            return Response({"detail": "Blog post not found"}, status=404)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=500)

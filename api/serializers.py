@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from .models import PendingCampaign, CampaignSignature
+from .models import PendingCampaign, CampaignSignature, BlogPost
 
 User = get_user_model()
 
@@ -47,4 +47,47 @@ class CampaignSignatureSerializer(serializers.ModelSerializer):
     user_email = serializers.EmailField(source='user.email', read_only=True)
     class Meta:
         model = CampaignSignature
-        fields = ['id', 'campaign', 'user', 'user_email', 'signed_at', 'is_anonymous'] 
+        fields = ['id', 'campaign', 'user', 'user_email', 'signed_at', 'is_anonymous']
+
+class BlogPostSerializer(serializers.ModelSerializer):
+    author_email = serializers.EmailField(source='author.email', read_only=True)
+    author_name = serializers.CharField(source='author.email', read_only=True)
+    tags = serializers.SerializerMethodField()
+    
+    def get_tags(self, obj):
+        """Return tags as a list"""
+        return obj.get_tags_list()
+    
+    def validate_slug(self, value):
+        """Validate slug format"""
+        import re
+        if not re.match(r'^[a-z0-9_-]+$', value):
+            raise serializers.ValidationError(
+                'Slug must contain only lowercase letters, numbers, hyphens, and underscores.'
+            )
+        return value
+    
+    class Meta:
+        model = BlogPost
+        fields = [
+            'id', 'title', 'slug', 'content', 'excerpt', 'tags', 'category',
+            'image_url', 'is_published', 'created_at', 'updated_at', 
+            'published_at', 'reading_time', 'author', 'author_email', 'author_name'
+        ]
+        read_only_fields = ['created_at', 'updated_at', 'author']
+
+class BlogPostListSerializer(serializers.ModelSerializer):
+    author_email = serializers.EmailField(source='author.email', read_only=True)
+    tags = serializers.SerializerMethodField()
+    
+    def get_tags(self, obj):
+        """Return tags as a list"""
+        return obj.get_tags_list()
+    
+    class Meta:
+        model = BlogPost
+        fields = [
+            'id', 'title', 'slug', 'excerpt', 'tags', 'category',
+            'image_url', 'is_published', 'created_at', 'published_at', 
+            'reading_time', 'author_email'
+        ] 

@@ -4,7 +4,9 @@ from .views import (
     SubmitCampaignView, ApprovedCampaignsView, RejectedCampaignsView, PendingCampaignsAdminView, ApproveCampaignView, UpdateCampaignStatusView,
     SignCampaignView, CampaignSignaturesView, CheckUserSignatureView, UserSignedCampaignsView, UserIdSignedCampaignsView,
     UserListView, UserDetailView, UpdateUserRoleView, ValidateTokenView,
-    PerformanceSummaryView, EndpointPerformanceView, SlowRequestsView, SystemMetricsView
+    PerformanceSummaryView, EndpointPerformanceView, SlowRequestsView, SystemMetricsView,
+    BlogPostListView, BlogPostDetailView, BlogPostCreateView, BlogPostUpdateView, BlogPostDeleteView, 
+    BlogPostAdminListView, BlogPostPublishView
 )
 
 urlpatterns = [
@@ -41,4 +43,13 @@ urlpatterns = [
     path('performance/endpoints/<str:endpoint>', EndpointPerformanceView.as_view(), name='endpoint-performance-detail'),
     path('performance/slow-requests', SlowRequestsView.as_view(), name='slow-requests'),
     path('performance/system-metrics', SystemMetricsView.as_view(), name='system-metrics'),
+    
+    # Blog endpoints
+    path('blog/posts', BlogPostListView.as_view(), name='blog-posts'),
+    path('blog/posts/<str:slug>', BlogPostDetailView.as_view(), name='blog-post-detail'),
+    path('admin/blog/posts', BlogPostAdminListView.as_view(), name='admin-blog-posts'),
+    path('admin/blog/posts/create', BlogPostCreateView.as_view(), name='create-blog-post'),
+    path('admin/blog/posts/<int:post_id>', BlogPostUpdateView.as_view(), name='update-blog-post'),
+    path('admin/blog/posts/<int:post_id>/delete', BlogPostDeleteView.as_view(), name='delete-blog-post'),
+    path('admin/blog/posts/<int:post_id>/publish', BlogPostPublishView.as_view(), name='publish-blog-post'),
 ] 
