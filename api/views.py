@@ -785,23 +785,48 @@ class BlogPostCreateView(APIView):
     """
     Create new blog post
     
-    Creates a new blog post. Only superadmin can create posts.
+    Creates a new blog post. Any authenticated user can create posts.
+    Posts are created as unpublished and need admin approval.
     """
     permission_classes = [IsAuthenticated]
     
     def post(self, request):
-        if request.user.role != 'superadmin':
-            return Response({"detail": "Only superadmin can create blog posts"}, status=403)
+        # Any authenticated user can create blog posts
+        # Posts are automatically set to unpublished for admin approval
         
         try:
             serializer = BlogPostSerializer(data=request.data)
             if serializer.is_valid():
                 # Set author to current user
                 serializer.save(author=request.user)
-                return Response(serializer.data, status=201)
-            return Response(serializer.errors, status=400)
+                return Response({
+                    "success": True,
+                    "message": "مطلب شما با موفقیت ایجاد شد و در انتظار تایید ادمین است.",
+                    "post": serializer.data
+                }, status=201)
+            # Return detailed error messages in Persian
+            error_messages = []
+            for field, errors in serializer.errors.items():
+                if field == 'title':
+                    error_messages.append("عنوان مطلب الزامی است و باید بین 3 تا 255 کاراکتر باشد.")
+                elif field == 'content':
+                    error_messages.append("محتوای مطلب الزامی است.")
+                elif field == 'category':
+                    error_messages.append("دسته‌بندی مطلب الزامی است.")
+                elif field == 'slug':
+                    error_messages.append("نامک مطلب باید فقط شامل حروف کوچک، اعداد، خط تیره و زیرخط باشد.")
+                else:
+                    error_messages.append(f"خطا در فیلد {field}: {errors[0]}")
+            return Response({
+                "success": False,
+                "detail": "خطا در ایجاد مطلب",
+                "errors": error_messages
+            }, status=400)
         except Exception as e:
-            return Response({"detail": str(e)}, status=500)
+            return Response({
+                "success": False,
+                "detail": "خطای داخلی سرور در ایجاد مطلب"
+            }, status=500)
 
 class BlogPostUpdateView(APIView):
     """
@@ -862,6 +887,24 @@ class BlogPostAdminListView(APIView):
             return Response({"detail": "Only superadmin can access admin blog list"}, status=403)
         
         try:
+            # Get query parameters
+            status_filter = request.GET.get('status', 'all')  # all, published, unpublished
+            
+            queryset = BlogPost.objects.all()
+            
+            # Apply status filter
+            if status_filter == 'published':
+                queryset = queryset.filter(is_published=True)
+            elif status_filter == 'unpublished':
+                queryset = queryset.filter(is_published=False)
+            
+            posts = queryset.order_by('-created_at')
+            serializer = BlogPostSerializer(posts, many=True)
+            return Response(serializer.data)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=500)
+        
+        try:
             posts = BlogPost.objects.all().order_by('-created_at')
             serializer = BlogPostSerializer(posts, many=True)
             return Response(serializer.data)
@@ -880,6 +923,29 @@ class BlogPostPublishView(APIView):
     def post(self, request, post_id):
         if request.user.role != 'superadmin':
             return Response({"detail": "Only superadmin can publish/unpublish blog posts"}, status=403)
+        
+        try:
+            post = BlogPost.objects.get(id=post_id)
+            action = request.data.get('action', 'toggle')  # toggle, approve, reject
+            
+            if action == 'approve':
+                post.is_published = True
+                if not post.published_at:
+                    post.published_at = timezone.now()
+            elif action == 'reject':
+                post.is_published = False
+            else:  # toggle
+                post.is_published = not post.is_published
+                if post.is_published and not post.published_at:
+                    post.published_at = timezone.now()
+            
+            post.save()
+            serializer = BlogPostSerializer(post)
+            return Response(serializer.data)
+        except BlogPost.DoesNotExist:
+            return Response({"detail": "Blog post not found"}, status=404)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=500)
         
         try:
             post = BlogPost.objects.get(id=post_id)

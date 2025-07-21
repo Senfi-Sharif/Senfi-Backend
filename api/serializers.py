@@ -47,7 +47,7 @@ class CampaignSignatureSerializer(serializers.ModelSerializer):
     user_email = serializers.EmailField(source='user.email', read_only=True)
     class Meta:
         model = CampaignSignature
-        fields = ['id', 'campaign', 'user', 'user_email', 'signed_at', 'is_anonymous']
+        fields = ['id', 'campaign', 'user', 'user_email', 'signed_at', 'is_anonymous'] 
 
 class BlogPostSerializer(serializers.ModelSerializer):
     author_email = serializers.EmailField(source='author.email', read_only=True)
@@ -67,6 +67,10 @@ class BlogPostSerializer(serializers.ModelSerializer):
             )
         return value
     
+    def create(self, validated_data):
+        """Create blog post - slug will be auto-generated in model save method"""
+        return super().create(validated_data)
+    
     class Meta:
         model = BlogPost
         fields = [
@@ -75,6 +79,9 @@ class BlogPostSerializer(serializers.ModelSerializer):
             'published_at', 'reading_time', 'author', 'author_email', 'author_name'
         ]
         read_only_fields = ['created_at', 'updated_at', 'author']
+        extra_kwargs = {
+            'slug': {'required': False, 'allow_blank': True}
+        }
 
 class BlogPostListSerializer(serializers.ModelSerializer):
     author_email = serializers.EmailField(source='author.email', read_only=True)

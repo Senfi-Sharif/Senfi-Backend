@@ -99,29 +99,28 @@ class CampaignSignature(models.Model):
         return f"{self.user_email} signed {self.campaign}"  # campaign.__str__ returns title
 
 class BlogPost(models.Model):
-    """Blog post model for the blog system"""
     CATEGORY_CHOICES = [
         ('اخبار', 'اخبار'),
         ('مقالات', 'مقالات'),
-        ('آموزش', 'آموزش'),
-        ('گزارش', 'گزارش'),
-        ('مصاحبه', 'مصاحبه'),
+        ('گزارش‌ها', 'گزارش‌ها'),
+        ('اطلاعیه‌ها', 'اطلاعیه‌ها'),
+        ('داستان‌های دانشجویی', 'داستان‌های دانشجویی'),
         ('سایر', 'سایر'),
     ]
     
     title = models.CharField(max_length=255, verbose_name='عنوان')
-    slug = models.SlugField(max_length=255, unique=True, verbose_name='نامک')
+    slug = models.SlugField(max_length=255, unique=True, blank=True, verbose_name='نامک')
     content = models.TextField(verbose_name='محتوای اصلی')
     excerpt = models.TextField(max_length=500, blank=True, verbose_name='خلاصه')
-    author = models.ForeignKey(User, on_delete=models.CASCADE, verbose_name='نویسنده')
+    tags = models.TextField(blank=True, verbose_name='برچسب‌ها')  # Stored as comma-separated values
     category = models.CharField(max_length=50, choices=CATEGORY_CHOICES, default='سایر', verbose_name='دسته‌بندی')
-    tags = models.CharField(max_length=500, blank=True, verbose_name='برچسب‌ها')
     image_url = models.URLField(blank=True, null=True, verbose_name='آدرس تصویر')
     is_published = models.BooleanField(default=False, verbose_name='منتشر شده')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='تاریخ ایجاد')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='تاریخ بروزرسانی')
     published_at = models.DateTimeField(null=True, blank=True, verbose_name='تاریخ انتشار')
-    reading_time = models.IntegerField(default=5, verbose_name='زمان مطالعه (دقیقه)')
+    reading_time = models.IntegerField(default=0, verbose_name='زمان مطالعه (دقیقه)')
+    author = models.ForeignKey(User, on_delete=models.CASCADE, verbose_name='نویسنده')
     
     class Meta:
         verbose_name = 'مطلب بلاگ'
@@ -134,60 +133,30 @@ class BlogPost(models.Model):
     def save(self, *args, **kwargs):
         # Auto-generate slug if not provided
         if not self.slug:
+            import re
             from django.utils.text import slugify
-            self.slug = slugify(self.title)
-        
-        # Set published_at when publishing for the first time
-        if self.is_published and not self.published_at:
             from django.utils import timezone
-            self.published_at = timezone.now()
+            
+            # Create base slug from title
+            base_slug = slugify(self.title, allow_unicode=True)
+            
+            # Add timestamp to make it unique
+            timestamp = str(int(timezone.now().timestamp()))
+            self.slug = f"{base_slug}-{timestamp}"
+        
+        # Calculate reading time (rough estimate: 200 words per minute)
+        if self.content:
+            word_count = len(self.content.split())
+            self.reading_time = max(1, word_count // 200)
         
         super().save(*args, **kwargs)
     
     def get_tags_list(self):
         """Return tags as a list"""
-        if not self.tags:
-            return []
-        
-        # Handle different formats of tags
-        tags_str = self.tags.strip()
-        
-        # If it looks like a JSON array, try to parse it
-        if tags_str.startswith('[') and tags_str.endswith(']'):
-            try:
-                import json
-                import ast
-                # Try to parse as JSON first
-                tags_list = json.loads(tags_str)
-                if isinstance(tags_list, list):
-                    return [str(tag).strip() for tag in tags_list if tag.strip()]
-            except (json.JSONDecodeError, ValueError):
-                try:
-                    # Try to parse as Python literal
-                    tags_list = ast.literal_eval(tags_str)
-                    if isinstance(tags_list, list):
-                        return [str(tag).strip() for tag in tags_list if tag.strip()]
-                except (ValueError, SyntaxError):
-                    pass
-        
-        # Fallback to comma-separated string
-        return [tag.strip() for tag in tags_str.split(',') if tag.strip()]
+        if self.tags:
+            return [tag.strip() for tag in self.tags.split(',') if tag.strip()]
+        return []
     
     def set_tags_list(self, tags_list):
         """Set tags from a list"""
         self.tags = ', '.join(tags_list)
-    
-    @property
-    def reading_time_text(self):
-        """Return reading time as text"""
-        if self.reading_time <= 1:
-            return "کمتر از 1 دقیقه"
-        elif self.reading_time < 60:
-            return f"{self.reading_time} دقیقه"
-        else:
-            hours = self.reading_time // 60
-            minutes = self.reading_time % 60
-            if minutes == 0:
-                return f"{hours} ساعت"
-            else:
-                return f"{hours} ساعت و {minutes} دقیقه"
