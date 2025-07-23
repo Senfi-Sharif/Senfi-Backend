@@ -276,6 +276,9 @@ class SubmitCampaignView(APIView):
                     request.data['category'] = faculty
                 elif dormitory and dormitory != 'خوابگاهی نیستم':
                     request.data['category'] = dormitory
+            # جلوگیری از ثبت کارزار با دسته‌بندی خوابگاهی نیستم
+            if request.data.get('category') == 'خوابگاهی نیستم':
+                return Response({"success": False, "detail": "دسته‌بندی نامعتبر است."}, status=400)
             serializer = CampaignSerializer(data=request.data)
             if serializer.is_valid():
                 if serializer.validated_data['deadline'] <= timezone.now():
@@ -851,79 +854,84 @@ class BlogPostUpdateView(APIView):
     """
     Update blog post
     
-    Updates an existing blog post. Only superadmin can update posts.
+    Updates an existing blog post. Only superadmin, center_member, head, faculty_member, dorm_member can update posts (faculty/dorm only their own category).
     """
     permission_classes = [IsAuthenticated]
     def put(self, request, post_id):
-        if request.user.role not in ['superadmin', 'center_member', 'head']:
-            return Response({"detail": "Only superadmin, center_member or head can update blog posts"}, status=403)
-        
+        user = request.user
         try:
             post = BlogPost.objects.get(id=post_id)
-            serializer = BlogPostSerializer(post, data=request.data, partial=True)
-            if serializer.is_valid():
-                serializer.save()
-                return Response(serializer.data)
-            return Response(serializer.errors, status=400)
         except BlogPost.DoesNotExist:
             return Response({"detail": "Blog post not found"}, status=404)
-        except Exception as e:
-            return Response({"detail": str(e)}, status=500)
+        # Permission check
+        if user.role in ['superadmin', 'center_member', 'head']:
+            pass
+        elif user.role == 'faculty_member' and user.faculty and user.faculty != 'نامشخص' and post.category == user.faculty:
+            pass
+        elif user.role == 'dorm_member' and user.dormitory and user.dormitory != 'خوابگاهی نیستم' and post.category == user.dormitory:
+            pass
+        else:
+            return Response({"detail": "Only superadmin, center_member, head, faculty_member (for their faculty), or dorm_member (for their dormitory) can update blog posts"}, status=403)
+        serializer = BlogPostSerializer(post, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=400)
 
 class BlogPostDeleteView(APIView):
     """
     Delete blog post
     
-    Deletes a blog post. Only superadmin can delete posts.
+    Deletes a blog post. Only superadmin, center_member, head, faculty_member, dorm_member can delete posts (faculty/dorm only their own category).
     """
     permission_classes = [IsAuthenticated]
     
     def delete(self, request, post_id):
-        if request.user.role not in ['superadmin', 'center_member', 'head']:
-            return Response({"detail": "Only superadmin, center_member or head can delete blog posts"}, status=403)
-        
+        user = request.user
         try:
             post = BlogPost.objects.get(id=post_id)
-            post.delete()
-            return Response({"detail": "Blog post deleted successfully"})
         except BlogPost.DoesNotExist:
             return Response({"detail": "Blog post not found"}, status=404)
-        except Exception as e:
-            return Response({"detail": str(e)}, status=500)
+        # Permission check
+        if user.role in ['superadmin', 'center_member', 'head']:
+            pass
+        elif user.role == 'faculty_member' and user.faculty and user.faculty != 'نامشخص' and post.category == user.faculty:
+            pass
+        elif user.role == 'dorm_member' and user.dormitory and user.dormitory != 'خوابگاهی نیستم' and post.category == user.dormitory:
+            pass
+        else:
+            return Response({"detail": "Only superadmin, center_member, head, faculty_member (for their faculty), or dorm_member (for their dormitory) can delete blog posts"}, status=403)
+        post.delete()
+        return Response({"detail": "Blog post deleted successfully"})
 
 class BlogPostAdminListView(APIView):
     """
     Get all blog posts for admin management
     
     Returns all blog posts (published and unpublished) for admin management.
-    Only superadmin can access.
+    Only superadmin, center_member, head, faculty_member, dorm_member can access.
     """
     permission_classes = [IsAuthenticated]
     
     def get(self, request):
-        if request.user.role not in ['superadmin', 'center_member', 'head']:
-            return Response({"detail": "Only superadmin, center_member or head can access admin blog list"}, status=403)
-        
-        try:
-            # Get query parameters
-            status_filter = request.GET.get('status', 'all')  # all, published, unpublished
-            
+        user = request.user
+        # Determine queryset based on role
+        if user.role in ['superadmin', 'center_member', 'head']:
             queryset = BlogPost.objects.all()
-            
+        elif user.role == 'faculty_member' and user.faculty and user.faculty != 'نامشخص':
+            queryset = BlogPost.objects.filter(category=user.faculty)
+        elif user.role == 'dorm_member' and user.dormitory and user.dormitory != 'خوابگاهی نیستم':
+            queryset = BlogPost.objects.filter(category=user.dormitory)
+        else:
+            return Response({"detail": "Only superadmin, center_member, head, faculty_member, or dorm_member can access admin blog list"}, status=403)
+        try:
+            status_filter = request.GET.get('status', 'all')  # all, published, unpublished
             # Apply status filter
             if status_filter == 'published':
                 queryset = queryset.filter(is_published=True)
             elif status_filter == 'unpublished':
                 queryset = queryset.filter(is_published=False)
-            
             posts = queryset.order_by('-created_at')
-            serializer = BlogPostSerializer(posts, many=True)
-            return Response(serializer.data)
-        except Exception as e:
-            return Response({"detail": str(e)}, status=500)
-        
-        try:
-            posts = BlogPost.objects.all().order_by('-created_at')
             serializer = BlogPostSerializer(posts, many=True)
             return Response(serializer.data)
         except Exception as e:
@@ -934,51 +942,39 @@ class BlogPostPublishView(APIView):
     Publish or unpublish blog post
     
     Toggles the published status of a blog post.
-    Only superadmin can publish/unpublish posts.
+    Only superadmin, center_member, head, faculty_member, dorm_member can publish/unpublish posts (faculty/dorm only their own category).
     """
     permission_classes = [IsAuthenticated]
     
     def post(self, request, post_id):
-        if request.user.role not in ['superadmin', 'center_member', 'head']:
-            return Response({"detail": "Only superadmin, center_member or head can publish/unpublish blog posts"}, status=403)
-        
+        user = request.user
         try:
             post = BlogPost.objects.get(id=post_id)
-            action = request.data.get('action', 'toggle')  # toggle, approve, reject
-            
-            if action == 'approve':
-                post.is_published = True
-                if not post.published_at:
-                    post.published_at = timezone.now()
-            elif action == 'reject':
-                post.is_published = False
-            else:  # toggle
-                post.is_published = not post.is_published
-                if post.is_published and not post.published_at:
-                    post.published_at = timezone.now()
-            
-            post.save()
-            serializer = BlogPostSerializer(post)
-            return Response(serializer.data)
         except BlogPost.DoesNotExist:
             return Response({"detail": "Blog post not found"}, status=404)
-        except Exception as e:
-            return Response({"detail": str(e)}, status=500)
-        
-        try:
-            post = BlogPost.objects.get(id=post_id)
+        # Permission check
+        if user.role in ['superadmin', 'center_member', 'head']:
+            pass
+        elif user.role == 'faculty_member' and user.faculty and user.faculty != 'نامشخص' and post.category == user.faculty:
+            pass
+        elif user.role == 'dorm_member' and user.dormitory and user.dormitory != 'خوابگاهی نیستم' and post.category == user.dormitory:
+            pass
+        else:
+            return Response({"detail": "Only superadmin, center_member, head, faculty_member (for their faculty), or dorm_member (for their dormitory) can publish/unpublish blog posts"}, status=403)
+        action = request.data.get('action', 'toggle')  # toggle, approve, reject
+        if action == 'approve':
+            post.is_published = True
+            if not post.published_at:
+                post.published_at = timezone.now()
+        elif action == 'reject':
+            post.is_published = False
+        else:  # toggle
             post.is_published = not post.is_published
-            
             if post.is_published and not post.published_at:
                 post.published_at = timezone.now()
-            
-            post.save()
-            serializer = BlogPostSerializer(post)
-            return Response(serializer.data)
-        except BlogPost.DoesNotExist:
-            return Response({"detail": "Blog post not found"}, status=404)
-        except Exception as e:
-            return Response({"detail": str(e)}, status=500)
+        post.save()
+        serializer = BlogPostSerializer(post)
+        return Response(serializer.data)
 
 class CampaignDetailView(APIView):
     permission_classes = [permissions.AllowAny]
@@ -996,12 +992,12 @@ class CampaignCategoryChoicesView(APIView):
     permission_classes = [permissions.AllowAny]
     def get(self, request):
         user = request.user
-        # اگر کاربر لاگین نیست فقط مسائل دانشگاهی
+        def filter_out_invalid(categories):
+            return [c for c in categories if c != 'خوابگاهی نیستم']
         if not user.is_authenticated:
             return Response({
                 "categories": ["مسائل دانشگاهی"]
             })
-        # اگر کاربر لاگین است و نقشش ادمین نیست، فقط لیبل‌های مجاز را بده
         allowed = ["مسائل دانشگاهی"]
         if hasattr(user, 'faculty') and user.faculty and user.faculty != "نامشخص":
             allowed.append(user.faculty)
@@ -1013,14 +1009,15 @@ class CampaignCategoryChoicesView(APIView):
             allowed.append("شورای عمومی")
         # اگر نقش ادمین دارد، همه را ببیند (و شورای عمومی هم اضافه شود)
         if hasattr(user, 'role') and user.role in ["superadmin", "head", "center_member"]:
+            from .choices import CAMPAIGN_CATEGORY_CHOICES
             all_labels = [c[0] for c in CAMPAIGN_CATEGORY_CHOICES]
             if "شورای عمومی" not in all_labels:
                 all_labels.append("شورای عمومی")
             return Response({
-                "categories": all_labels
+                "categories": filter_out_invalid(all_labels)
             })
         return Response({
-            "categories": allowed
+            "categories": filter_out_invalid(allowed)
         })
 
 # --- Poll Endpoints ---
@@ -1031,18 +1028,12 @@ class PollListCreateView(APIView):
     """
     def get(self, request):
         polls = Poll.objects.filter(status="approved").order_by('-created_at')
-        # Prefetch participations for current user for all polls
         if request.user.is_authenticated:
             polls = polls.prefetch_related(
                 models.Prefetch('participations', to_attr='user_participations', queryset=PollParticipation.objects.filter(user=request.user))
             )
             polls = list(polls)  # Ensure prefetch works for serializer
-            serializer = PollSerializer(polls, many=True, context={'request': request})
-        else:
-            class DummyUser:
-                is_authenticated = False
-            dummy_request = type('DummyRequest', (), {'user': DummyUser()})()
-            serializer = PollSerializer(polls, many=True, context={'request': dummy_request})
+        serializer = PollSerializer(polls, many=True, context={'request': request})
         return Response({"success": True, "polls": serializer.data, "total": len(serializer.data)})
 
     def post(self, request):

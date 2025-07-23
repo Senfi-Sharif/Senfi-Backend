@@ -127,21 +127,15 @@ class CampaignSignature(models.Model):
         return f"{self.user_email} signed {self.campaign}"  # campaign.__str__ returns title
 
 class BlogPost(models.Model):
-    CATEGORY_CHOICES = [
-        ('اخبار', 'اخبار'),
-        ('مقالات', 'مقالات'),
-        ('گزارش‌ها', 'گزارش‌ها'),
-        ('اطلاعیه‌ها', 'اطلاعیه‌ها'),
-        ('داستان‌های دانشجویی', 'داستان‌های دانشجویی'),
-        ('سایر', 'سایر'),
-    ]
-    
+    from .choices import CAMPAIGN_CATEGORY_CHOICES
+    CATEGORY_CHOICES = CAMPAIGN_CATEGORY_CHOICES
+    # دسته‌بندی‌های بلاگ را با کارزار یکی کن
     title = models.CharField(max_length=255, verbose_name='عنوان')
     slug = models.SlugField(max_length=255, unique=True, blank=True, verbose_name='نامک')
     content = models.TextField(verbose_name='محتوای اصلی')
     excerpt = models.TextField(max_length=500, blank=True, verbose_name='خلاصه')
     tags = models.TextField(blank=True, verbose_name='برچسب‌ها')  # Stored as comma-separated values
-    category = models.CharField(max_length=50, choices=CATEGORY_CHOICES, default='سایر', verbose_name='دسته‌بندی')
+    category = models.CharField(max_length=64, choices=CATEGORY_CHOICES, default='مسائل دانشگاهی', verbose_name='دسته‌بندی')
     image_url = models.URLField(blank=True, null=True, verbose_name='آدرس تصویر')
     is_published = models.BooleanField(default=False, verbose_name='منتشر شده')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='تاریخ ایجاد')
