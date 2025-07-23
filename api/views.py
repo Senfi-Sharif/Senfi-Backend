@@ -10,8 +10,8 @@ from django.core.mail import send_mail
 from django.conf import settings
 from rest_framework.decorators import api_view, permission_classes
 import random
-from .models import PendingCampaign
-from .serializers import PendingCampaignSerializer
+from .models import Campaign, CampaignSignature, User, BlogPost
+from .serializers import CampaignSerializer, CampaignSignatureSerializer, BlogPostSerializer, BlogPostListSerializer
 from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnly
 from rest_framework import status as drf_status
 from django.utils import timezone
@@ -24,6 +24,10 @@ from rest_framework.exceptions import ValidationError
 import logging
 import sys
 from django.db import models
+from datetime import timedelta
+from .choices import CAMPAIGN_CATEGORY_CHOICES
+from .models import Poll, PollOption, PollVote, PollParticipation
+from .serializers import PollSerializer, PollOptionSerializer, PollVoteSerializer
 
 # Security logger
 security_logger = logging.getLogger('security')
@@ -39,7 +43,7 @@ def is_sharif_email(email):
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
 def check_email(request):
-    email = request.data.get('email', '').lower()
+    email = request.data.get('email', '').lower().strip()
     if not is_sharif_email(email):
         return Response({"exists": False})
     exists = User.objects.filter(email=email).exists()
@@ -62,10 +66,6 @@ def send_verification_code(request):
     code = ''.join(random.choices('0123456789', k=6))
     verification_codes[email] = code
     try:
-        # Debug email configuration
-        print(f"[DEBUG] Email config - HOST: {settings.EMAIL_HOST}, PORT: {settings.EMAIL_PORT}, USER: {settings.EMAIL_HOST_USER}")
-        print(f"[DEBUG] Attempting to send email to: {email}")
-        
         send_mail(
             'Sharif Verification Code',
             f'Your verification code is: {code}',
@@ -73,11 +73,8 @@ def send_verification_code(request):
             [email],
             fail_silently=False
         )
-        print(f"[INFO] Verification code sent to {email}")
         return Response({"success": True})
     except Exception as e:
-        print(f"[ERROR] Failed to send verification code to {email}: {str(e)}")
-        print(f"[ERROR] Email settings - HOST: {settings.EMAIL_HOST}, PORT: {settings.EMAIL_PORT}, USER: {settings.EMAIL_HOST_USER}")
         return Response({"success": False, "detail": f"Failed to send verification code: {str(e)}"}, status=500)
 
 @api_view(['POST'])
@@ -85,14 +82,6 @@ def send_verification_code(request):
 def test_email_config(request):
     """Test email configuration - for debugging only"""
     try:
-        print(f"[DEBUG] Testing email configuration...")
-        print(f"[DEBUG] EMAIL_HOST: {settings.EMAIL_HOST}")
-        print(f"[DEBUG] EMAIL_PORT: {settings.EMAIL_PORT}")
-        print(f"[DEBUG] EMAIL_USE_TLS: {settings.EMAIL_USE_TLS}")
-        print(f"[DEBUG] EMAIL_USE_SSL: {settings.EMAIL_USE_SSL}")
-        print(f"[DEBUG] EMAIL_HOST_USER: {settings.EMAIL_HOST_USER}")
-        print(f"[DEBUG] DEFAULT_FROM_EMAIL: {settings.DEFAULT_FROM_EMAIL}")
-        
         # Test SMTP connection
         import smtplib
         from email.mime.text import MIMEText
@@ -105,7 +94,6 @@ def test_email_config(request):
         
         return Response({"success": True, "message": "Email configuration is working"})
     except Exception as e:
-        print(f"[ERROR] Email configuration test failed: {str(e)}")
         return Response({"success": False, "error": str(e)}, status=500)
 
 @api_view(['POST'])
@@ -138,6 +126,9 @@ class RegisterView(generics.CreateAPIView):
 
     def post(self, request, *args, **kwargs):
         try:
+            # ایمیل را فقط lowercase و trim کن
+            if 'email' in request.data:
+                request.data['email'] = request.data['email'].lower().strip()
             serializer = self.get_serializer(data=request.data)
             serializer.is_valid(raise_exception=True)
             user = serializer.save()
@@ -197,12 +188,17 @@ class LoginView(APIView):
             # validated_data is always a dict after is_valid(), linter warning is a false positive
             email = serializer.validated_data['email']  # type: ignore
             password = serializer.validated_data['password']  # type: ignore
+            email = email.lower().strip()
             user = authenticate(request, email=email, password=password)
             if not user:
                 # Log failed login attempt
                 log_security_event("LOGIN_ATTEMPT", email, request.META.get("REMOTE_ADDR", "unknown"), success=False)
                 return Response({"success": False, "detail": "Invalid credentials"}, status=401)
+            remember_me = request.data.get('remember_me', False)
             refresh = RefreshToken.for_user(user)
+            if remember_me:
+                refresh.set_exp(lifetime=timedelta(days=14))
+                refresh.access_token.set_exp(lifetime=timedelta(days=14))
             # Log successful login
             log_security_event("LOGIN_SUCCESS", user.email, request.META.get("REMOTE_ADDR", "unknown"), success=True)
             return Response({
@@ -262,50 +258,35 @@ class ValidateTokenView(APIView):
 class SubmitCampaignView(APIView):
     """
     Submit a new campaign for approval
-    
     Creates a new campaign with pending status.
     Requires authentication.
     """
     permission_classes = [IsAuthenticated]
     def post(self, request):
-        data = request.data.copy()
-        data['email'] = request.user.email
-        
-        # Input validation
-        title = data.get('title', '').strip()
-        description = data.get('description', '').strip()
-        end_datetime = data.get('end_datetime')
-        
-        if not title:
-            return Response({"success": False, "detail": "عنوان کارزار الزامی است."}, status=400)
-        
-        if len(title) < 3:
-            return Response({"success": False, "detail": "عنوان کارزار باید حداقل 3 کاراکتر باشد."}, status=400)
-        
-        if len(title) > 255:
-            return Response({"success": False, "detail": "عنوان کارزار خیلی طولانی است."}, status=400)
-        
-        if not description:
-            return Response({"success": False, "detail": "توضیحات کارزار الزامی است."}, status=400)
-        
-        if len(description) < 10:
-            return Response({"success": False, "detail": "توضیحات کارزار باید حداقل 10 کاراکتر باشد."}, status=400)
-        
-        if not end_datetime:
-            return Response({"success": False, "detail": "تاریخ پایان الزامی است."}, status=400)
-        
         try:
-            serializer = PendingCampaignSerializer(data=data)
+            # ایمیل را فقط lowercase و trim کن
+            if 'email' in request.data:
+                request.data['email'] = request.data['email'].lower().strip()
+            # اگر کاربر عادی است و faculty یا dormitory فرستاده، دسته‌بندی را بر اساس آن ست کن
+            user = request.user
+            if user.role == 'simple_user':
+                faculty = request.data.get('faculty')
+                dormitory = request.data.get('dormitory')
+                if faculty and faculty != 'نامشخص':
+                    request.data['category'] = faculty
+                elif dormitory and dormitory != 'خوابگاهی نیستم':
+                    request.data['category'] = dormitory
+            serializer = CampaignSerializer(data=request.data)
             if serializer.is_valid():
-                if serializer.validated_data['end_datetime'] <= timezone.now():
+                if serializer.validated_data['deadline'] <= timezone.now():
                     return Response({"success": False, "detail": "تاریخ پایان باید بعد از اکنون باشد."}, status=400)
-                campaign = serializer.save(status="pending")
+                campaign = serializer.save(status="pending", author=request.user, anonymous_allowed=request.data.get('anonymous_allowed', True))
                 return Response({
                     "success": True,
                     "campaignId": campaign.id,
                     "status": campaign.status,
                     "created_at": campaign.created_at,
-                    "end_datetime": campaign.end_datetime
+                    "deadline": campaign.deadline
                 })
             return Response(serializer.errors, status=400)
         except Exception as e:
@@ -315,53 +296,59 @@ class SubmitCampaignView(APIView):
 class ApprovedCampaignsView(APIView):
     permission_classes = [IsAuthenticatedOrReadOnly]
     def get(self, request):
-        user = getattr(request, 'user', None)
-        all_labels = list(PendingCampaign.objects.filter(status="approved").values_list('label', flat=True))
-        allowed_labels = None
+        user = request.user
+        all_categories = list(Campaign.objects.filter(status="approved").values_list('category', flat=True))
+        allowed_categories = None
         # اگر کاربر authenticated است
-        if user and hasattr(user, 'is_authenticated') and user.is_authenticated:
+        if user.is_authenticated:
             # اگر نقش ادمین دارد، همه را ببیند
             if hasattr(user, 'role') and user.role in ["superadmin", "head", "center_member"]:
-                campaigns = PendingCampaign.objects.filter(status="approved")
+                campaigns = Campaign.objects.filter(status="approved")
             else:
-                allowed_labels = []
+                allowed_categories = []
                 if hasattr(user, 'faculty') and user.faculty and user.faculty != "نامشخص":
-                    allowed_labels.append(user.faculty.strip().lower())
-                allowed_labels.append('مسائل دانشگاهی'.strip().lower())
+                    allowed_categories.append(user.faculty.strip().lower())
+                allowed_categories.append('مسائل دانشگاهی'.strip().lower())
                 if hasattr(user, 'dormitory') and user.dormitory and user.dormitory != 'خوابگاهی نیستم':
-                    allowed_labels.append(user.dormitory.strip().lower())
-                all_campaigns = PendingCampaign.objects.filter(status="approved")
-                campaigns = [c for c in all_campaigns if c.label and c.label.strip().lower() in allowed_labels]
+                    allowed_categories.append(user.dormitory.strip().lower())
+                all_campaigns = Campaign.objects.filter(status="approved")
+                campaigns = [c for c in all_campaigns if c.category and c.category.strip().lower() in allowed_categories]
         else:
-            # anonymous user: فقط مسائل دانشگاهی
-            campaigns = PendingCampaign.objects.filter(status="approved", label='مسائل دانشگاهی')
-        serializer = PendingCampaignSerializer(campaigns, many=True)
+            # anonymous user: همه کارزارهای تایید شده را نمایش بده
+            campaigns = Campaign.objects.filter(status="approved")
+        serializer = CampaignSerializer(campaigns, many=True, context={'request': request})
         return Response({
             "success": True,
             "campaigns": serializer.data,
             "total": len(serializer.data),
             "debug_user_faculty": getattr(user, 'faculty', None),
             "debug_user_dormitory": getattr(user, 'dormitory', None),
-            "debug_all_labels": all_labels,
-            "debug_allowed_labels": allowed_labels,
+            "debug_all_categories": all_categories,
+            "debug_allowed_categories": allowed_categories,
             "debug_user_role": getattr(user, 'role', None),
-            "debug_is_authenticated": getattr(user, 'is_authenticated', None),
+            "debug_is_authenticated": user.is_authenticated,
         })
 
 class RejectedCampaignsView(APIView):
     permission_classes = [permissions.AllowAny]
     def get(self, request):
-        campaigns = PendingCampaign.objects.filter(status="rejected")
-        serializer = PendingCampaignSerializer(campaigns, many=True)
+        campaigns = Campaign.objects.filter(status="rejected")
+        serializer = CampaignSerializer(campaigns, many=True)
         return Response({"success": True, "campaigns": serializer.data, "total": len(serializer.data)})
 
 class PendingCampaignsAdminView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request):
-        if request.user.role not in ["superadmin", "head", "center_member"]:
+        user = request.user
+        if user.role in ["superadmin", "head", "center_member"]:
+            campaigns = Campaign.objects.all().order_by('-created_at')
+        elif user.role == "dorm_member" and user.dormitory and user.dormitory != "خوابگاهی نیستم":
+            campaigns = Campaign.objects.filter(category=user.dormitory).order_by('-created_at')
+        elif user.role == "faculty_member" and user.faculty and user.faculty != "نامشخص":
+            campaigns = Campaign.objects.filter(category=user.faculty).order_by('-created_at')
+        else:
             return Response({"success": False, "detail": "دسترسی ندارید."}, status=403)
-        campaigns = PendingCampaign.objects.filter(status="pending")
-        serializer = PendingCampaignSerializer(campaigns, many=True)
+        serializer = CampaignSerializer(campaigns, many=True)
         return Response({"success": True, "campaigns": serializer.data, "total": len(serializer.data)})
 
 class ApproveCampaignView(APIView):
@@ -373,16 +360,23 @@ class ApproveCampaignView(APIView):
     """
     permission_classes = [IsAuthenticated]
     def post(self, request):
-        if request.user.role not in ["superadmin", "head", "center_member"]:
-            return Response({"success": False, "detail": "دسترسی ندارید."}, status=403)
+        user = request.user
         campaign_id = request.data.get('campaign_id')
         approved = request.data.get('approved')
         if campaign_id is None or approved is None:
             return Response({"success": False, "detail": "campaign_id و approved الزامی است."}, status=400)
         try:
-            campaign = PendingCampaign.objects.get(id=campaign_id)
-        except PendingCampaign.DoesNotExist:
+            campaign = Campaign.objects.get(id=campaign_id)
+        except Campaign.DoesNotExist:
             return Response({"success": False, "detail": "Campaign not found"}, status=404)
+        if user.role in ["superadmin", "head", "center_member"]:
+            pass
+        elif user.role == "dorm_member" and user.dormitory and user.dormitory != "خوابگاهی نیستم" and campaign.category == user.dormitory:
+            pass
+        elif user.role == "faculty_member" and user.faculty and user.faculty != "نامشخص" and campaign.category == user.faculty:
+            pass
+        else:
+            return Response({"success": False, "detail": "دسترسی ندارید."}, status=403)
         campaign.status = "approved" if approved else "rejected"
         campaign.save()
         
@@ -401,14 +395,21 @@ class ApproveCampaignView(APIView):
 class UpdateCampaignStatusView(APIView):
     permission_classes = [IsAuthenticated]
     def put(self, request, campaign_id):
-        if request.user.role not in ["superadmin", "head", "center_member"]:
+        user = request.user
+        try:
+            campaign = Campaign.objects.get(id=campaign_id)
+        except Campaign.DoesNotExist:
+            return Response({"success": False, "detail": "کارزار یافت نشد"}, status=404)
+        if user.role in ["superadmin", "head", "center_member"]:
+            pass
+        elif user.role == "dorm_member" and user.dormitory and user.dormitory != "خوابگاهی نیستم" and campaign.category == user.dormitory:
+            pass
+        elif user.role == "faculty_member" and user.faculty and user.faculty != "نامشخص" and campaign.category == user.faculty:
+            pass
+        else:
             return Response({"success": False, "detail": "دسترسی ندارید."}, status=403)
         status_val = request.data.get('status')
         approved = request.data.get('approved')
-        try:
-            campaign = PendingCampaign.objects.get(id=campaign_id)
-        except PendingCampaign.DoesNotExist:
-            return Response({"success": False, "detail": "کارزار یافت نشد"}, status=404)
         if status_val:
             if status_val not in ["approved", "rejected", "pending"]:
                 return Response({"success": False, "detail": "وضعیت نامعتبر است"}, status=400)
@@ -422,15 +423,34 @@ class UpdateCampaignStatusView(APIView):
         else:
             return Response({"success": False, "detail": "باید یکی از status یا approved ارسال شود"}, status=400)
 
+class DeleteCampaignView(APIView):
+    permission_classes = [IsAuthenticated]
+    def delete(self, request, campaign_id):
+        user = request.user
+        try:
+            campaign = Campaign.objects.get(id=campaign_id)
+        except Campaign.DoesNotExist:
+            return Response({"detail": "کارزار پیدا نشد"}, status=404)
+        if user.role in ["superadmin", "head", "center_member"]:
+            pass
+        elif user.role == "dorm_member" and user.dormitory and user.dormitory != "خوابگاهی نیستم" and campaign.category == user.dormitory:
+            pass
+        elif user.role == "faculty_member" and user.faculty and user.faculty != "نامشخص" and campaign.category == user.faculty:
+            pass
+        else:
+            return Response({"detail": "دسترسی ندارید."}, status=403)
+        campaign.delete()
+        return Response({"success": True, "message": "کارزار با موفقیت حذف شد."})
+
 # --- Signature Endpoints ---
 
 class SignCampaignView(APIView):
     permission_classes = [IsAuthenticated]
     def post(self, request, campaign_id):
-        from .models import PendingCampaign
+        from .models import Campaign
         try:
-            campaign = PendingCampaign.objects.get(id=campaign_id)
-        except PendingCampaign.DoesNotExist:
+            campaign = Campaign.objects.get(id=campaign_id)
+        except Campaign.DoesNotExist:
             return Response({"success": False, "detail": "کارزار یافت نشد"}, status=404)
         # Check if already signed
         if CampaignSignature.objects.filter(campaign_id=campaign_id, user=request.user).exists():
@@ -453,42 +473,52 @@ class SignCampaignView(APIView):
 class CampaignSignaturesView(APIView):
     permission_classes = [permissions.AllowAny]
     def get(self, request, campaign_id):
-        from .models import PendingCampaign
+        from .models import Campaign
         try:
-            campaign = PendingCampaign.objects.get(id=campaign_id)
-        except PendingCampaign.DoesNotExist:
+            campaign = Campaign.objects.get(id=campaign_id)
+        except Campaign.DoesNotExist:
             return Response({"success": False, "detail": "کارزار یافت نشد"}, status=404)
-        if campaign.is_anonymous == "anonymous":
-            total_signatures = CampaignSignature.objects.filter(campaign_id=campaign_id).count()
+        # اگر کارزار شناس است، لیست کامل امضاکنندگان را بده
+        if not campaign.anonymous_allowed:
+            signatures = CampaignSignature.objects.filter(campaign_id=campaign_id)
+            signature_list = [
+                {
+                    "id": s.id,
+                    "user_email": s.user_email,
+                    "signed_at": s.signed_at,
+                    "is_anonymous": s.is_anonymous
+                } for s in signatures
+            ]
             return Response({
                 "success": True,
-                "signatures": [],
-                "total": total_signatures,
-                "campaign_is_anonymous": "anonymous"
+                "signatures": signature_list,
+                "total": len(signature_list),
+                "campaign_anonymous_allowed": False
             })
+        # اگر کارزار ناشناس است، فقط تعداد را بده
         signatures = CampaignSignature.objects.filter(campaign_id=campaign_id)
         signature_list = [
             {
                 "id": s.id,
-                "user_email": s.user_email if s.is_anonymous == "public" else "ناشناس",
+                "user_email": "ناشناس",
                 "signed_at": s.signed_at,
                 "is_anonymous": s.is_anonymous
             } for s in signatures
         ]
         return Response({
             "success": True,
-            "signatures": signature_list,
+            "signatures": [],
             "total": len(signature_list),
-            "campaign_is_anonymous": campaign.is_anonymous
+            "campaign_anonymous_allowed": True
         })
 
 class CheckUserSignatureView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request, campaign_id):
-        from .models import PendingCampaign
+        from .models import Campaign
         try:
-            campaign = PendingCampaign.objects.get(id=campaign_id)
-        except PendingCampaign.DoesNotExist:
+            campaign = Campaign.objects.get(id=campaign_id)
+        except Campaign.DoesNotExist:
             return Response({"success": False, "detail": "کارزار یافت نشد"}, status=404)
         signature = CampaignSignature.objects.filter(campaign_id=campaign_id, user=request.user).first()
         if signature:
@@ -763,14 +793,7 @@ class BlogPostListView(APIView):
             return Response({"detail": str(e)}, status=500)
 
 class BlogPostDetailView(APIView):
-    """
-    Get single blog post by slug
-    
-    Returns detailed blog post information.
-    Public endpoint - no authentication required.
-    """
     permission_classes = [permissions.AllowAny]
-    
     def get(self, request, slug):
         try:
             post = BlogPost.objects.get(slug=slug, is_published=True)
@@ -791,37 +814,33 @@ class BlogPostCreateView(APIView):
     permission_classes = [IsAuthenticated]
     
     def post(self, request):
-        # Any authenticated user can create blog posts
-        # Posts are automatically set to unpublished for admin approval
-        
         try:
             serializer = BlogPostSerializer(data=request.data)
             if serializer.is_valid():
-                # Set author to current user
                 serializer.save(author=request.user)
                 return Response({
                     "success": True,
                     "message": "مطلب شما با موفقیت ایجاد شد و در انتظار تایید ادمین است.",
                     "post": serializer.data
                 }, status=201)
-            # Return detailed error messages in Persian
-            error_messages = []
-            for field, errors in serializer.errors.items():
-                if field == 'title':
-                    error_messages.append("عنوان مطلب الزامی است و باید بین 3 تا 255 کاراکتر باشد.")
-                elif field == 'content':
-                    error_messages.append("محتوای مطلب الزامی است.")
-                elif field == 'category':
-                    error_messages.append("دسته‌بندی مطلب الزامی است.")
-                elif field == 'slug':
-                    error_messages.append("نامک مطلب باید فقط شامل حروف کوچک، اعداد، خط تیره و زیرخط باشد.")
-                else:
-                    error_messages.append(f"خطا در فیلد {field}: {errors[0]}")
-            return Response({
-                "success": False,
-                "detail": "خطا در ایجاد مطلب",
-                "errors": error_messages
-            }, status=400)
+            else:
+                error_messages = []
+                for field, errors in serializer.errors.items():
+                    if field == 'title':
+                        error_messages.append("عنوان مطلب الزامی است و باید بین 3 تا 255 کاراکتر باشد.")
+                    elif field == 'content':
+                        error_messages.append("محتوای مطلب الزامی است.")
+                    elif field == 'category':
+                        error_messages.append("دسته‌بندی مطلب الزامی است.")
+                    elif field == 'slug':
+                        error_messages.append("نامک مطلب باید فقط شامل حروف کوچک، اعداد، خط تیره و زیرخط باشد.")
+                    else:
+                        error_messages.append(f"خطا در فیلد {field}: {errors[0]}")
+                return Response({
+                    "success": False,
+                    "detail": "خطا در ایجاد مطلب",
+                    "errors": error_messages
+                }, status=400)
         except Exception as e:
             return Response({
                 "success": False,
@@ -835,10 +854,9 @@ class BlogPostUpdateView(APIView):
     Updates an existing blog post. Only superadmin can update posts.
     """
     permission_classes = [IsAuthenticated]
-    
     def put(self, request, post_id):
-        if request.user.role != 'superadmin':
-            return Response({"detail": "Only superadmin can update blog posts"}, status=403)
+        if request.user.role not in ['superadmin', 'center_member', 'head']:
+            return Response({"detail": "Only superadmin, center_member or head can update blog posts"}, status=403)
         
         try:
             post = BlogPost.objects.get(id=post_id)
@@ -861,8 +879,8 @@ class BlogPostDeleteView(APIView):
     permission_classes = [IsAuthenticated]
     
     def delete(self, request, post_id):
-        if request.user.role != 'superadmin':
-            return Response({"detail": "Only superadmin can delete blog posts"}, status=403)
+        if request.user.role not in ['superadmin', 'center_member', 'head']:
+            return Response({"detail": "Only superadmin, center_member or head can delete blog posts"}, status=403)
         
         try:
             post = BlogPost.objects.get(id=post_id)
@@ -883,8 +901,8 @@ class BlogPostAdminListView(APIView):
     permission_classes = [IsAuthenticated]
     
     def get(self, request):
-        if request.user.role != 'superadmin':
-            return Response({"detail": "Only superadmin can access admin blog list"}, status=403)
+        if request.user.role not in ['superadmin', 'center_member', 'head']:
+            return Response({"detail": "Only superadmin, center_member or head can access admin blog list"}, status=403)
         
         try:
             # Get query parameters
@@ -921,8 +939,8 @@ class BlogPostPublishView(APIView):
     permission_classes = [IsAuthenticated]
     
     def post(self, request, post_id):
-        if request.user.role != 'superadmin':
-            return Response({"detail": "Only superadmin can publish/unpublish blog posts"}, status=403)
+        if request.user.role not in ['superadmin', 'center_member', 'head']:
+            return Response({"detail": "Only superadmin, center_member or head can publish/unpublish blog posts"}, status=403)
         
         try:
             post = BlogPost.objects.get(id=post_id)
@@ -961,3 +979,284 @@ class BlogPostPublishView(APIView):
             return Response({"detail": "Blog post not found"}, status=404)
         except Exception as e:
             return Response({"detail": str(e)}, status=500)
+
+class CampaignDetailView(APIView):
+    permission_classes = [permissions.AllowAny]
+    def get(self, request, campaign_id):
+        try:
+            campaign = Campaign.objects.get(id=campaign_id)
+            serializer = CampaignSerializer(campaign, context={'request': request})
+            return Response(serializer.data)
+        except Campaign.DoesNotExist:
+            return Response({"detail": "Campaign not found"}, status=404)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=500)
+
+class CampaignCategoryChoicesView(APIView):
+    permission_classes = [permissions.AllowAny]
+    def get(self, request):
+        user = request.user
+        # اگر کاربر لاگین نیست فقط مسائل دانشگاهی
+        if not user.is_authenticated:
+            return Response({
+                "categories": ["مسائل دانشگاهی"]
+            })
+        # اگر کاربر لاگین است و نقشش ادمین نیست، فقط لیبل‌های مجاز را بده
+        allowed = ["مسائل دانشگاهی"]
+        if hasattr(user, 'faculty') and user.faculty and user.faculty != "نامشخص":
+            allowed.append(user.faculty)
+        if hasattr(user, 'dormitory') and user.dormitory and user.dormitory != 'خوابگاهی نیستم':
+            allowed.append(user.dormitory)
+        # اضافه کردن شورای عمومی برای اعضا و ناظران شورا
+        if (hasattr(user, 'council_member_status') and user.council_member_status in ["member", "observer"]) or \
+           (hasattr(user, 'role') and user.role in ["superadmin", "head"]):
+            allowed.append("شورای عمومی")
+        # اگر نقش ادمین دارد، همه را ببیند (و شورای عمومی هم اضافه شود)
+        if hasattr(user, 'role') and user.role in ["superadmin", "head", "center_member"]:
+            all_labels = [c[0] for c in CAMPAIGN_CATEGORY_CHOICES]
+            if "شورای عمومی" not in all_labels:
+                all_labels.append("شورای عمومی")
+            return Response({
+                "categories": all_labels
+            })
+        return Response({
+            "categories": allowed
+        })
+
+# --- Poll Endpoints ---
+
+class PollListCreateView(APIView):
+    """
+    List all approved polls or create a new poll (authenticated).
+    """
+    def get(self, request):
+        polls = Poll.objects.filter(status="approved").order_by('-created_at')
+        # Prefetch participations for current user for all polls
+        if request.user.is_authenticated:
+            polls = polls.prefetch_related(
+                models.Prefetch('participations', to_attr='user_participations', queryset=PollParticipation.objects.filter(user=request.user))
+            )
+            polls = list(polls)  # Ensure prefetch works for serializer
+            serializer = PollSerializer(polls, many=True, context={'request': request})
+        else:
+            class DummyUser:
+                is_authenticated = False
+            dummy_request = type('DummyRequest', (), {'user': DummyUser()})()
+            serializer = PollSerializer(polls, many=True, context={'request': dummy_request})
+        return Response({"success": True, "polls": serializer.data, "total": len(serializer.data)})
+
+    def post(self, request):
+        if not request.user.is_authenticated:
+            return Response({"success": False, "detail": "نیاز به ورود دارید."}, status=403)
+        data = request.data.copy()
+        # جلوگیری از ساخت نظرسنجی شورای عمومی توسط observer
+        if data.get('category') == 'شورای عمومی' and getattr(request.user, 'council_member_status', None) == 'observer':
+            return Response({"success": False, "detail": "شما به عنوان ناظر شورای عمومی مجاز به ایجاد نظرسنجی با این دسته‌بندی نیستید."}, status=403)
+        data['author'] = request.user.id
+        serializer = PollSerializer(data=data, context={'request': request})
+        if serializer.is_valid():
+            poll = serializer.save(status="pending", author=request.user)
+            return Response({"success": True, "poll": PollSerializer(poll, context={'request': request}).data})
+        return Response({"success": False, "errors": serializer.errors}, status=400)
+
+class PollDetailView(APIView):
+    """
+    Retrieve or update poll details (public for GET, admin/author for PUT).
+    """
+    def get(self, request, poll_id):
+        try:
+            poll = Poll.objects.get(id=poll_id)
+            serializer = PollSerializer(poll, context={'request': request})
+            return Response({"success": True, "poll": serializer.data})
+        except Poll.DoesNotExist:
+            return Response({"success": False, "detail": "نظرسنجی پیدا نشد"}, status=404)
+
+    def put(self, request, poll_id):
+        try:
+            poll = Poll.objects.get(id=poll_id)
+        except Poll.DoesNotExist:
+            return Response({"success": False, "detail": "نظرسنجی پیدا نشد"}, status=404)
+        user = request.user
+        is_admin = getattr(user, 'role', None) in ["superadmin", "head", "center_member", "dorm_member", "faculty_member"]
+        is_author = poll.author == user
+        if not (is_admin or is_author):
+            return Response({"success": False, "detail": "دسترسی ندارید."}, status=403)
+        serializer = PollSerializer(poll, data=request.data, partial=True, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response({"success": True, "poll": serializer.data})
+        return Response({"success": False, "errors": serializer.errors}, status=400)
+
+class PollVoteView(APIView):
+    """
+    Vote in a poll (authenticated). Supports single/multiple choice.
+    """
+    def post(self, request, poll_id):
+        if not request.user.is_authenticated:
+            return Response({"success": False, "detail": "نیاز به ورود دارید."}, status=403)
+        try:
+            poll = Poll.objects.get(id=poll_id)
+        except Poll.DoesNotExist:
+            return Response({"success": False, "detail": "نظرسنجی پیدا نشد"}, status=404)
+        if poll.is_expired():
+            return Response({"success": False, "detail": "مهلت رأی دادن به پایان رسیده است."}, status=400)
+        # Check if already participated
+        if PollParticipation.objects.filter(poll=poll, user=request.user).exists():
+            return Response({"success": False, "detail": "شما قبلاً در این نظرسنجی شرکت کرده‌اید."}, status=400)
+        option_ids = request.data.get('option_ids')
+        if not option_ids:
+            return Response({"success": False, "detail": "گزینه‌ای انتخاب نشده است."}, status=400)
+        if not isinstance(option_ids, list):
+            option_ids = [option_ids]
+        # Validate options
+        valid_option_ids = set(poll.options.values_list('id', flat=True))
+        for oid in option_ids:
+            if oid not in valid_option_ids:
+                return Response({"success": False, "detail": f"گزینه نامعتبر: {oid}"}, status=400)
+        # For single choice, only one vote allowed
+        if not poll.is_multiple_choice and len(option_ids) > 1:
+            return Response({"success": False, "detail": "این نظرسنجی فقط یک گزینه را می‌پذیرد."}, status=400)
+        # Register participation
+        PollParticipation.objects.create(user=request.user, poll=poll)
+        # Save votes (anonymous or identified based on poll setting)
+        created_votes = []
+        for oid in option_ids:
+            vote_data = {
+                'poll': poll,
+                'option_id': oid
+            }
+            # If poll is not anonymous, save user info
+            if not poll.is_anonymous:
+                vote_data['user'] = request.user
+            vote = PollVote.objects.create(**vote_data)
+            created_votes.append(vote)
+        return Response({"success": True, "message": "رأی شما ثبت شد.", "votes": PollVoteSerializer(created_votes, many=True).data})
+
+class PollResultsView(APIView):
+    """
+    Get poll results (public if is_public, else only admin/author).
+    """
+    def get(self, request, poll_id):
+        try:
+            poll = Poll.objects.get(id=poll_id)
+        except Poll.DoesNotExist:
+            return Response({"success": False, "detail": "نظرسنجی پیدا نشد"}, status=404)
+        # Show results to everyone (since is_public field was removed)
+        serializer = PollSerializer(poll, context={'request': request})
+        return Response({"success": True, "results": serializer.data})
+
+class PollAdminListView(APIView):
+    """
+    List all polls for admin management (admin only).
+    """
+    permission_classes = [IsAuthenticated]
+    def get(self, request):
+        user = request.user
+        if getattr(user, 'role', None) in ["superadmin", "head", "center_member"]:
+            polls = Poll.objects.all().order_by('-created_at')
+        elif getattr(user, 'role', None) == "dorm_member" and user.dormitory and user.dormitory != "خوابگاهی نیستم":
+            polls = Poll.objects.filter(category=user.dormitory).order_by('-created_at')
+        elif getattr(user, 'role', None) == "faculty_member" and user.faculty and user.faculty != "نامشخص":
+            polls = Poll.objects.filter(category=user.faculty).order_by('-created_at')
+        else:
+            return Response({"success": False, "detail": "دسترسی ندارید."}, status=403)
+        serializer = PollSerializer(polls, many=True, context={'request': request})
+        return Response({"success": True, "polls": serializer.data, "total": len(serializer.data)})
+
+class PollApproveRejectView(APIView):
+    """
+    Approve or reject a poll (admin only).
+    """
+    permission_classes = [IsAuthenticated]
+    def post(self, request):
+        if getattr(request.user, 'role', None) not in ["superadmin", "head", "center_member"]:
+            return Response({"success": False, "detail": "دسترسی ندارید."}, status=403)
+        poll_id = request.data.get('poll_id')
+        approved = request.data.get('approved')
+        if poll_id is None or approved is None:
+            return Response({"success": False, "detail": "poll_id و approved الزامی است."}, status=400)
+        try:
+            poll = Poll.objects.get(id=poll_id)
+        except Poll.DoesNotExist:
+            return Response({"success": False, "detail": "Poll not found"}, status=404)
+        poll.status = "approved" if approved else "rejected"
+        poll.save()
+        return Response({"success": True, "message": "نظرسنجی تایید شد" if approved else "نظرسنجی رد شد", "poll_id": poll.id, "new_status": poll.status})
+
+class PollDeleteView(APIView):
+    """
+    Delete a poll (admin or author).
+    """
+    permission_classes = [IsAuthenticated]
+    def delete(self, request, poll_id):
+        try:
+            poll = Poll.objects.get(id=poll_id)
+        except Poll.DoesNotExist:
+            return Response({"success": False, "detail": "نظرسنجی پیدا نشد"}, status=404)
+        is_admin = getattr(request.user, 'role', None) in ["superadmin", "head", "center_member"]
+        is_author = poll.author == request.user
+        if not (is_admin or is_author):
+            return Response({"success": False, "detail": "دسترسی ندارید."}, status=403)
+        poll.delete()
+        return Response({"success": True, "message": "نظرسنجی با موفقیت حذف شد."})
+
+
+class PollVotersView(APIView):
+    """
+    Get list of voters for a poll (only for non-anonymous polls).
+    """
+    def get(self, request, poll_id):
+        try:
+            poll = Poll.objects.get(id=poll_id)
+        except Poll.DoesNotExist:
+            return Response({"success": False, "detail": "نظرسنجی پیدا نشد"}, status=404)
+        
+        # Only show voters if poll is not anonymous
+        if poll.is_anonymous:
+            return Response({"success": False, "detail": "این نظرسنجی ناشناس است و لیست رأی‌دهندگان نمایش داده نمی‌شود."}, status=403)
+        
+        # Check permissions - only admin, author, or participants can see voters
+        is_admin = request.user.is_authenticated and getattr(request.user, 'role', None) in ["superadmin", "head", "center_member"]
+        is_author = request.user.is_authenticated and poll.author == request.user
+        has_participated = request.user.is_authenticated and PollParticipation.objects.filter(poll=poll, user=request.user).exists()
+        
+        if not (is_admin or is_author or has_participated):
+            return Response({"success": False, "detail": "دسترسی به لیست رأی‌دهندگان ندارید."}, status=403)
+        
+        # Get votes with user information
+        votes = PollVote.objects.filter(poll=poll, user__isnull=False).select_related('user', 'option').order_by('-voted_at')
+        
+        voters_data = []
+        for vote in votes:
+            voters_data.append({
+                'user_email': vote.user.email,
+                'option_text': vote.option.text,
+                'voted_at': vote.voted_at
+            })
+        
+        return Response({
+            "success": True, 
+            "voters": voters_data,
+            "total_voters": len(voters_data)
+        })
+
+class PollStatusUpdateView(APIView):
+    permission_classes = [IsAuthenticated]
+    def put(self, request, poll_id):
+        user = request.user
+        if getattr(user, 'role', None) not in ["superadmin", "head", "center_member"]:
+            return Response({"success": False, "detail": "دسترسی ندارید."}, status=403)
+        from .models import Poll
+        try:
+            poll = Poll.objects.get(id=poll_id)
+        except Poll.DoesNotExist:
+            return Response({"success": False, "detail": "نظرسنجی پیدا نشد"}, status=404)
+        status_val = request.data.get('status')
+        if status_val:
+            if status_val not in ["approved", "rejected", "pending", "closed"]:
+                return Response({"success": False, "detail": "وضعیت نامعتبر است"}, status=400)
+            poll.status = status_val
+            poll.save()
+            return Response({"success": True, "message": f"وضعیت نظرسنجی به {status_val} تغییر یافت"})
+        else:
+            return Response({"success": False, "detail": "باید status ارسال شود"}, status=400)

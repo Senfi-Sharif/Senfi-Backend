@@ -6,7 +6,10 @@ from .views import (
     UserListView, UserDetailView, UpdateUserRoleView, ValidateTokenView,
     PerformanceSummaryView, EndpointPerformanceView, SlowRequestsView, SystemMetricsView,
     BlogPostListView, BlogPostDetailView, BlogPostCreateView, BlogPostUpdateView, BlogPostDeleteView, 
-    BlogPostAdminListView, BlogPostPublishView
+    BlogPostAdminListView, BlogPostPublishView, CampaignDetailView, DeleteCampaignView,
+    CampaignCategoryChoicesView,
+    PollListCreateView, PollDetailView, PollVoteView, PollResultsView, PollVotersView, PollAdminListView, PollApproveRejectView, PollDeleteView,
+    PollStatusUpdateView,
 )
 
 urlpatterns = [
@@ -26,6 +29,9 @@ urlpatterns = [
     path('admin/campaigns', PendingCampaignsAdminView.as_view(), name='pending-campaigns-admin'),
     path('admin/campaigns/approve', ApproveCampaignView.as_view(), name='approve-campaign'),
     path('campaigns/<int:campaign_id>/status', UpdateCampaignStatusView.as_view(), name='update-campaign-status'),
+    path('campaigns/<int:campaign_id>', CampaignDetailView.as_view(), name='campaign-detail'),
+    path('campaigns/<int:campaign_id>/delete', DeleteCampaignView.as_view(), name='delete-campaign'),
+    path('campaigns/categories', CampaignCategoryChoicesView.as_view(), name='campaign-category-choices'),
 
     path('campaigns/<int:campaign_id>/sign', SignCampaignView.as_view(), name='sign-campaign'),
     path('campaigns/<int:campaign_id>/signatures', CampaignSignaturesView.as_view(), name='campaign-signatures'),
@@ -52,4 +58,15 @@ urlpatterns = [
     path('admin/blog/posts/<int:post_id>', BlogPostUpdateView.as_view(), name='update-blog-post'),
     path('admin/blog/posts/<int:post_id>/delete', BlogPostDeleteView.as_view(), name='delete-blog-post'),
     path('admin/blog/posts/<int:post_id>/publish', BlogPostPublishView.as_view(), name='publish-blog-post'),
+
+    # Poll endpoints
+    path('polls', PollListCreateView.as_view(), name='poll-list-create'),
+    path('polls/<int:poll_id>', PollDetailView.as_view(), name='poll-detail'),
+    path('polls/<int:poll_id>/vote', PollVoteView.as_view(), name='poll-vote'),
+    path('polls/<int:poll_id>/results', PollResultsView.as_view(), name='poll-results'),
+    path('polls/<int:poll_id>/voters', PollVotersView.as_view(), name='poll-voters'),
+    path('admin/polls', PollAdminListView.as_view(), name='poll-admin-list'),
+    path('admin/polls/approve', PollApproveRejectView.as_view(), name='poll-approve-reject'),
+    path('polls/<int:poll_id>/delete', PollDeleteView.as_view(), name='poll-delete'),
+    path('polls/<int:poll_id>/status', PollStatusUpdateView.as_view(), name='update-poll-status'),
 ] 
