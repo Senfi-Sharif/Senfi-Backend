@@ -1,6 +1,7 @@
 from django.urls import path
 from .views import (
     RegisterView, LoginView, UserInfoView, RefreshTokenView, check_email, send_verification_code, verify_code, test_email_config,
+    send_mobile_verification_code, verify_mobile_code, change_password,
     SubmitCampaignView, ApprovedCampaignsView, RejectedCampaignsView, PendingCampaignsAdminView, ApproveCampaignView, UpdateCampaignStatusView,
     SignCampaignView, CampaignSignaturesView, CheckUserSignatureView, UserSignedCampaignsView, UserIdSignedCampaignsView,
     UserListView, UserDetailView, UpdateUserRoleView, ValidateTokenView,
@@ -9,7 +10,7 @@ from .views import (
     BlogPostAdminListView, BlogPostPublishView, CampaignDetailView, DeleteCampaignView,
     CampaignCategoryChoicesView,
     PollListCreateView, PollDetailView, PollVoteView, PollResultsView, PollVotersView, PollAdminListView, PollApproveRejectView, PollDeleteView,
-    PollStatusUpdateView,
+    PollStatusUpdateView, UserVotedPollsView, UserCreatedCampaignsView, UserCreatedBlogPostsView, UserCreatedPollsView,
 )
 
 urlpatterns = [
@@ -20,6 +21,9 @@ urlpatterns = [
     path('auth/check-email', check_email, name='check-email'),
     path('auth/send-code', send_verification_code, name='send-code'),
     path('auth/verify-code', verify_code, name='verify-code'),
+    path('auth/send-mobile-code', send_mobile_verification_code, name='send-mobile-code'),
+    path('auth/verify-mobile-code', verify_mobile_code, name='verify-mobile-code'),
+    path('auth/change-password', change_password, name='change-password'),
     path('auth/test-email', test_email_config, name='test-email-config'),
     path('auth/validate', ValidateTokenView.as_view(), name='validate-token'),
 
@@ -69,4 +73,8 @@ urlpatterns = [
     path('admin/polls/approve', PollApproveRejectView.as_view(), name='poll-approve-reject'),
     path('polls/<int:poll_id>/delete', PollDeleteView.as_view(), name='poll-delete'),
     path('polls/<int:poll_id>/status', PollStatusUpdateView.as_view(), name='update-poll-status'),
+    path('user/voted-polls', UserVotedPollsView.as_view(), name='user-voted-polls'),
+    path('user/created-campaigns', UserCreatedCampaignsView.as_view(), name='user-created-campaigns'),
+    path('user/created-blog-posts', UserCreatedBlogPostsView.as_view(), name='user-created-blog-posts'),
+    path('user/created-polls', UserCreatedPollsView.as_view(), name='user-created-polls'),
 ] 

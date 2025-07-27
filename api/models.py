@@ -71,7 +71,7 @@ class Campaign(models.Model):
     CATEGORY_CHOICES = CAMPAIGN_CATEGORY_CHOICES
     title = models.CharField(max_length=255, verbose_name='عنوان')
     slug = models.SlugField(max_length=255, unique=True, blank=True, verbose_name='نامک')
-    content = models.TextField(verbose_name='متن کامل')
+    content = models.TextField(max_length=50000, verbose_name='متن کامل')  # ~50KB limit
     excerpt = models.TextField(max_length=500, blank=True, verbose_name='خلاصه')
     tags = models.TextField(blank=True, verbose_name='برچسب‌ها')
     category = models.CharField(max_length=64, choices=CATEGORY_CHOICES, default='مسائل دانشگاهی', verbose_name='دسته‌بندی')
@@ -132,7 +132,7 @@ class BlogPost(models.Model):
     # دسته‌بندی‌های بلاگ را با کارزار یکی کن
     title = models.CharField(max_length=255, verbose_name='عنوان')
     slug = models.SlugField(max_length=255, unique=True, blank=True, verbose_name='نامک')
-    content = models.TextField(verbose_name='محتوای اصلی')
+    content = models.TextField(max_length=50000, verbose_name='محتوای اصلی')  # ~50KB limit
     excerpt = models.TextField(max_length=500, blank=True, verbose_name='خلاصه')
     tags = models.TextField(blank=True, verbose_name='برچسب‌ها')  # Stored as comma-separated values
     category = models.CharField(max_length=64, choices=CATEGORY_CHOICES, default='مسائل دانشگاهی', verbose_name='دسته‌بندی')
@@ -193,7 +193,7 @@ class Poll(models.Model):
     ]
     title = models.CharField(max_length=255, verbose_name='عنوان')
     slug = models.SlugField(max_length=255, unique=True, blank=True, verbose_name='نامک')
-    description = models.TextField(verbose_name='توضیحات')
+    description = models.TextField(max_length=10000, verbose_name='توضیحات')  # ~10KB limit
     is_anonymous = models.BooleanField(default=True, verbose_name='رأی مخفی')
     is_multiple_choice = models.BooleanField(default=False, verbose_name='چندگزینه‌ای')
     max_choices = models.IntegerField(null=True, blank=True, help_text='حداکثر تعداد انتخاب مجاز برای رأی‌دهنده (در حالت چندگزینه‌ای). اگر خالی باشد، نامحدود است.')

@@ -199,6 +199,18 @@ if not CORS_ALLOW_ALL_ORIGINS:
 # Custom user model
 AUTH_USER_MODEL = 'api.User'
 
+# Cache configuration for rate limiting
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'unique-snowflake',
+        'TIMEOUT': 300,  # 5 minutes default timeout
+        'OPTIONS': {
+            'MAX_ENTRIES': 1000,
+        }
+    }
+}
+
 # Spectacular settings for API documentation
 SPECTACULAR_SETTINGS = {
     'TITLE': 'Senfi API',

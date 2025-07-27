@@ -18,6 +18,8 @@ from django.utils import timezone
 from .models import CampaignSignature, User, BlogPost
 from .serializers import CampaignSignatureSerializer, BlogPostSerializer, BlogPostListSerializer
 from django_ratelimit.decorators import ratelimit
+from django_ratelimit.exceptions import Ratelimited
+from django.utils.decorators import method_decorator
 from .utils import log_security_event, log_data_access, log_admin_action
 from .performance import performance_monitor
 from rest_framework.exceptions import ValidationError
@@ -36,6 +38,8 @@ User = get_user_model()
 
 # In-memory store for verification codes (like FastAPI version)
 verification_codes = {}
+# In-memory store for mobile verification codes
+mobile_verification_codes = {}
 
 def is_sharif_email(email):
     return email.lower().endswith("@sharif.edu")
@@ -51,6 +55,7 @@ def check_email(request):
 
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
+@method_decorator(ratelimit(key='ip', rate='5/h', method='POST'))
 def send_verification_code(request):
     email = request.data.get('email', '').lower().strip()
     
@@ -74,6 +79,8 @@ def send_verification_code(request):
             fail_silently=False
         )
         return Response({"success": True})
+    except Ratelimited:
+        return Response({"success": False, "detail": "تعداد درخواست‌های کد تایید بیش از حد مجاز است. لطفاً یک ساعت دیگر تلاش کنید."}, status=429)
     except Exception as e:
         return Response({"success": False, "detail": f"Failed to send verification code: {str(e)}"}, status=500)
 
@@ -118,12 +125,174 @@ def verify_code(request):
     valid = verification_codes.get(email) == code
     return Response({"valid": valid})
 
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+@method_decorator(ratelimit(key='ip', rate='5/h', method='POST'))
+def send_mobile_verification_code(request):
+    """Send verification code to mobile phone for existing users"""
+    email = request.data.get('email', '').lower().strip()
+    
+    # Input validation
+    if not email:
+        return Response({"success": False, "detail": "Email is required"}, status=400)
+    
+    if len(email) > 254:
+        return Response({"success": False, "detail": "Email is too long"}, status=400)
+    
+    if not is_sharif_email(email):
+        return Response({"success": False, "detail": "Email must end with @sharif.edu"}, status=400)
+    
+    # Check if user exists
+    try:
+        user = User.objects.get(email=email)
+    except User.DoesNotExist:
+        return Response({"success": False, "detail": "User not found"}, status=404)
+    
+    # Generate verification code
+    code = ''.join(random.choices('0123456789', k=6))
+    mobile_verification_codes[email] = code
+    
+    # For now, we'll send the code via email as a fallback
+    # In production, this should be replaced with SMS service
+    try:
+        send_mail(
+            'Sharif Mobile Verification Code',
+            f'Your mobile verification code is: {code}\n\nThis code will expire in 10 minutes.',
+            settings.DEFAULT_FROM_EMAIL,
+            [email],
+            fail_silently=False
+        )
+        
+        # Log security event
+        log_security_event("MOBILE_VERIFICATION_SENT", email, request.META.get("REMOTE_ADDR", "unknown"), success=True)
+        
+        return Response({"success": True, "message": "Verification code sent to your email"})
+    except Exception as e:
+        return Response({"success": False, "detail": f"Failed to send verification code: {str(e)}"}, status=500)
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def verify_mobile_code(request):
+    """Verify mobile code and log in user"""
+    email = request.data.get('email', '').lower().strip()
+    code = request.data.get('code', '').strip()
+    
+    # Input validation
+    if not email:
+        return Response({"success": False, "detail": "Email is required"}, status=400)
+    
+    if not code:
+        return Response({"success": False, "detail": "Verification code is required"}, status=400)
+    
+    if len(code) != 6 or not code.isdigit():
+        return Response({"success": False, "detail": "Invalid verification code format"}, status=400)
+    
+    if not is_sharif_email(email):
+        return Response({"success": False, "detail": "Email must end with @sharif.edu"}, status=400)
+    
+    # Check if user exists
+    try:
+        user = User.objects.get(email=email)
+    except User.DoesNotExist:
+        return Response({"success": False, "detail": "User not found"}, status=404)
+    
+    # Verify code
+    stored_code = mobile_verification_codes.get(email)
+    if not stored_code or stored_code != code:
+        log_security_event("MOBILE_VERIFICATION_FAILED", email, request.META.get("REMOTE_ADDR", "unknown"), success=False)
+        return Response({"success": False, "detail": "Invalid verification code"}, status=400)
+    
+    # Code is valid, log in user
+    refresh = RefreshToken.for_user(user)
+    
+    # Clear the used code
+    mobile_verification_codes.pop(email, None)
+    
+    # Log successful mobile login
+    log_security_event("MOBILE_LOGIN_SUCCESS", user.email, request.META.get("REMOTE_ADDR", "unknown"), success=True)
+    
+    return Response({
+        "success": True,
+        "token": str(refresh.access_token),
+        "user": UserSerializer(user).data,
+        "message": "ورود با موفقیت انجام شد"
+    })
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@method_decorator(ratelimit(key='user', rate='3/h', method='POST'))
+def change_password(request):
+    """Change user password with current password verification"""
+    current_password = request.data.get('current_password', '').strip()
+    new_password = request.data.get('new_password', '').strip()
+    confirm_password = request.data.get('confirm_password', '').strip()
+    
+    # Input validation
+    if not current_password:
+        return Response({"success": False, "detail": "رمز عبور فعلی الزامی است"}, status=400)
+    
+    if not new_password:
+        return Response({"success": False, "detail": "رمز عبور جدید الزامی است"}, status=400)
+    
+    if not confirm_password:
+        return Response({"success": False, "detail": "تکرار رمز عبور جدید الزامی است"}, status=400)
+    
+    if new_password != confirm_password:
+        return Response({"success": False, "detail": "رمز عبور جدید و تکرار آن یکسان نیستند"}, status=400)
+    
+    # Comprehensive password validation - return only specific errors
+    if len(new_password) < 8:
+        return Response({"success": False, "detail": "رمز عبور باید حداقل ۸ کاراکتر باشد"}, status=400)
+    
+    if not any(c.isupper() for c in new_password):
+        return Response({"success": False, "detail": "رمز عبور باید شامل حروف بزرگ باشد"}, status=400)
+    
+    if not any(c.islower() for c in new_password):
+        return Response({"success": False, "detail": "رمز عبور باید شامل حروف کوچک باشد"}, status=400)
+    
+    if not any(c.isdigit() for c in new_password):
+        return Response({"success": False, "detail": "رمز عبور باید شامل اعداد باشد"}, status=400)
+    
+    if not any(c in '!@#$%^&*(),.?":{}|<>' for c in new_password):
+        return Response({"success": False, "detail": "رمز عبور باید شامل کاراکترهای خاص باشد"}, status=400)
+    
+    # Check if new password is different from current
+    if current_password == new_password:
+        return Response({"success": False, "detail": "رمز عبور جدید باید متفاوت از رمز عبور فعلی باشد"}, status=400)
+    
+    # Verify current password
+    user = request.user
+    if not user.check_password(current_password):
+        log_security_event("PASSWORD_CHANGE_FAILED", user.email, request.META.get("REMOTE_ADDR", "unknown"), success=False, details="Invalid current password")
+        return Response({"success": False, "detail": "رمز عبور فعلی اشتباه است"}, status=400)
+    
+    # Update password
+    try:
+        user.set_password(new_password)
+        user.save()
+        
+        # Log successful password change
+        log_security_event("PASSWORD_CHANGE_SUCCESS", user.email, request.META.get("REMOTE_ADDR", "unknown"), success=True)
+        
+        # Invalidate all existing tokens for security
+        from rest_framework_simplejwt.tokens import RefreshToken
+        RefreshToken.for_user(user)
+        
+        return Response({
+            "success": True, 
+            "message": "رمز عبور با موفقیت تغییر یافت. لطفاً دوباره وارد شوید."
+        })
+    except Exception as e:
+        log_security_event("PASSWORD_CHANGE_ERROR", user.email, request.META.get("REMOTE_ADDR", "unknown"), success=False, details=str(e))
+        return Response({"success": False, "detail": "خطا در تغییر رمز عبور"}, status=500)
+
 # Create your views here.
 
 class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
     permission_classes = [permissions.AllowAny]
 
+    @method_decorator(ratelimit(key='ip', rate='3/h', method='POST'))
     def post(self, request, *args, **kwargs):
         try:
             # ایمیل را فقط lowercase و trim کن
@@ -146,6 +315,8 @@ class RegisterView(generics.CreateAPIView):
                 "user": UserSerializer(user).data,
                 "message": "ثبت نام با موفقیت انجام شد و وارد سیستم شدید"
             })
+        except Ratelimited:
+            return Response({"success": False, "detail": "تعداد تلاش‌های ثبت نام بیش از حد مجاز است. لطفاً یک ساعت دیگر تلاش کنید."}, status=429)
         except ValidationError as e:
             # Handle validation errors - return the first error message
             if hasattr(e, 'detail') and isinstance(e.detail, dict):
@@ -181,6 +352,7 @@ class LoginView(APIView):
     """
     permission_classes = [permissions.AllowAny]
     
+    @method_decorator(ratelimit(key='ip', rate='5/m', method='POST'))
     def post(self, request):
         try:
             serializer = LoginSerializer(data=request.data)
@@ -206,6 +378,8 @@ class LoginView(APIView):
                 "token": str(refresh.access_token),
                 "user": UserSerializer(user).data
             })
+        except Ratelimited:
+            return Response({"success": False, "detail": "تعداد تلاش‌های ورود بیش از حد مجاز است. لطفاً ۵ دقیقه دیگر تلاش کنید."}, status=429)
         except Exception as e:
             security_logger.error(f'Login error: {str(e)} - IP: {request.META.get("REMOTE_ADDR", "unknown")}')
             return Response({"success": False, "detail": "خطا در ورود به سیستم"}, status=500)
@@ -255,15 +429,54 @@ class ValidateTokenView(APIView):
 
 # --- Campaign Endpoints ---
 
+def check_user_rate_limit(user_id):
+    """Check current rate limit usage for a user"""
+    from django.core.cache import cache
+    rate_limit_key = f"campaign_submit:{user_id}"
+    return cache.get(rate_limit_key, 0)
+
+def reset_user_rate_limit(user_id):
+    """Reset rate limit for a user (for testing purposes)"""
+    from django.core.cache import cache
+    rate_limit_key = f"campaign_submit:{user_id}"
+    cache.delete(rate_limit_key)
+    return True
+
 class SubmitCampaignView(APIView):
     """
     Submit a new campaign for approval
     Creates a new campaign with pending status.
     Requires authentication.
+    Rate limited to 3 campaigns per hour per user.
     """
     permission_classes = [IsAuthenticated]
+    
     def post(self, request):
         try:
+            # Manual rate limiting check
+            from django.core.cache import cache
+            from datetime import timedelta
+            
+            # Create rate limit key
+            rate_limit_key = f"campaign_submit:{request.user.id}"
+            
+            # Check current usage
+            current_usage = cache.get(rate_limit_key, 0)
+            
+            if current_usage >= 3:
+                return Response({
+                    "success": False, 
+                    "detail": "شما بیش از حد مجاز کارزار ایجاد کرده‌اید. لطفاً یک ساعت دیگر تلاش کنید."
+                }, status=429)
+            
+            # Increment usage
+            cache.set(rate_limit_key, current_usage + 1, 3600)  # 1 hour timeout
+            
+            # Content size validation
+            content = request.data.get('content', '')
+            if len(content) > 50000:
+                return Response({"success": False, "detail": "متن کارزار نباید بیشتر از ۵۰,۰۰۰ کاراکتر باشد"}, status=400)
+            
             # ایمیل را فقط lowercase و trim کن
             if 'email' in request.data:
                 request.data['email'] = request.data['email'].lower().strip()
@@ -449,15 +662,23 @@ class DeleteCampaignView(APIView):
 
 class SignCampaignView(APIView):
     permission_classes = [IsAuthenticated]
+    
+    @method_decorator(ratelimit(key='user', rate='10/m', method='POST'))
     def post(self, request, campaign_id):
         from .models import Campaign
         try:
             campaign = Campaign.objects.get(id=campaign_id)
         except Campaign.DoesNotExist:
             return Response({"success": False, "detail": "کارزار یافت نشد"}, status=404)
+        
+        # Check if campaign is approved
+        if campaign.status != 'approved':
+            return Response({"success": False, "detail": "فقط کارزارهای تایید شده قابل امضا هستند"}, status=400)
+        
         # Check if already signed
         if CampaignSignature.objects.filter(campaign_id=campaign_id, user=request.user).exists():
             return Response({"success": False, "detail": "شما قبلاً این کارزار را امضا کرده‌اید"}, status=400)
+        
         is_anonymous = request.data.get('is_anonymous', 'public')
         signature = CampaignSignature.objects.create(
             campaign=campaign,
@@ -481,6 +702,16 @@ class CampaignSignaturesView(APIView):
             campaign = Campaign.objects.get(id=campaign_id)
         except Campaign.DoesNotExist:
             return Response({"success": False, "detail": "کارزار یافت نشد"}, status=404)
+        
+        # Only show signatures for approved campaigns
+        if campaign.status != 'approved':
+            return Response({
+                "success": True,
+                "signatures": [],
+                "total": 0,
+                "campaign_anonymous_allowed": campaign.anonymous_allowed
+            })
+        
         # اگر کارزار شناس است، لیست کامل امضاکنندگان را بده
         if not campaign.anonymous_allowed:
             signatures = CampaignSignature.objects.filter(campaign_id=campaign_id)
@@ -799,11 +1030,40 @@ class BlogPostDetailView(APIView):
     permission_classes = [permissions.AllowAny]
     def get(self, request, slug):
         try:
-            post = BlogPost.objects.get(slug=slug, is_published=True)
-            serializer = BlogPostSerializer(post)
-            return Response(serializer.data)
-        except BlogPost.DoesNotExist:
-            return Response({"detail": "Blog post not found"}, status=404)
+            # First try to get published post (public access)
+            try:
+                post = BlogPost.objects.get(slug=slug, is_published=True)
+                serializer = BlogPostSerializer(post)
+                return Response(serializer.data)
+            except BlogPost.DoesNotExist:
+                pass
+            
+            # If not published, check for unpublished post with access control
+            try:
+                post = BlogPost.objects.get(slug=slug, is_published=False)
+                
+                # Check access permissions for unpublished posts
+                user = request.user
+                
+                # Check if user is authenticated
+                if not user.is_authenticated:
+                    return Response({"detail": "Blog post not found"}, status=404)
+                
+                # Check if user is the author or has admin role
+                is_author = post.author == user
+                is_admin = hasattr(user, 'role') and user.role in ['superadmin', 'head', 'center_member']
+                is_dorm_admin = hasattr(user, 'role') and user.role == 'dorm_member' and hasattr(user, 'dormitory') and user.dormitory and user.dormitory != 'خوابگاهی نیستم' and post.category == user.dormitory
+                is_faculty_admin = hasattr(user, 'role') and user.role == 'faculty_member' and hasattr(user, 'faculty') and user.faculty and user.faculty != 'نامشخص' and post.category == user.faculty
+                
+                if not (is_author or is_admin or is_dorm_admin or is_faculty_admin):
+                    return Response({"detail": "Blog post not found"}, status=404)
+                
+                serializer = BlogPostSerializer(post)
+                return Response(serializer.data)
+                
+            except BlogPost.DoesNotExist:
+                return Response({"detail": "Blog post not found"}, status=404)
+                
         except Exception as e:
             return Response({"detail": str(e)}, status=500)
 
@@ -813,11 +1073,18 @@ class BlogPostCreateView(APIView):
     
     Creates a new blog post. Any authenticated user can create posts.
     Posts are created as unpublished and need admin approval.
+    Rate limited to 2 posts per hour per user.
     """
     permission_classes = [IsAuthenticated]
     
+    @method_decorator(ratelimit(key='user', rate='2/h', method='POST'))
     def post(self, request):
         try:
+            # Content size validation
+            content = request.data.get('content', '')
+            if len(content) > 50000:
+                return Response({"success": False, "detail": "محتوای بلاگ نباید بیشتر از ۵۰,۰۰۰ کاراکتر باشد"}, status=400)
+            
             serializer = BlogPostSerializer(data=request.data)
             if serializer.is_valid():
                 serializer.save(author=request.user)
@@ -844,6 +1111,8 @@ class BlogPostCreateView(APIView):
                     "detail": "خطا در ایجاد مطلب",
                     "errors": error_messages
                 }, status=400)
+        except Ratelimited:
+            return Response({"success": False, "detail": "شما بیش از حد مجاز مطلب ایجاد کرده‌اید. لطفاً یک ساعت دیگر تلاش کنید."}, status=429)
         except Exception as e:
             return Response({
                 "success": False,
@@ -981,8 +1250,36 @@ class CampaignDetailView(APIView):
     def get(self, request, campaign_id):
         try:
             campaign = Campaign.objects.get(id=campaign_id)
-            serializer = CampaignSerializer(campaign, context={'request': request})
-            return Response(serializer.data)
+            
+            # Check access permissions based on campaign status
+            user = request.user
+            
+            # If campaign is approved, anyone can view it
+            if campaign.status == 'approved':
+                serializer = CampaignSerializer(campaign, context={'request': request})
+                return Response(serializer.data)
+            
+            # If campaign is pending or rejected, only author and admins can view it
+            if campaign.status in ['pending', 'rejected']:
+                # Check if user is authenticated
+                if not user.is_authenticated:
+                    return Response({"detail": "Campaign not found"}, status=404)
+                
+                # Check if user is the author or has admin role
+                is_author = campaign.author == user
+                is_admin = hasattr(user, 'role') and user.role in ['superadmin', 'head', 'center_member']
+                is_dorm_admin = hasattr(user, 'role') and user.role == 'dorm_member' and hasattr(user, 'dormitory') and user.dormitory and user.dormitory != 'خوابگاهی نیستم' and campaign.category == user.dormitory
+                is_faculty_admin = hasattr(user, 'role') and user.role == 'faculty_member' and hasattr(user, 'faculty') and user.faculty and user.faculty != 'نامشخص' and campaign.category == user.faculty
+                
+                if not (is_author or is_admin or is_dorm_admin or is_faculty_admin):
+                    return Response({"detail": "Campaign not found"}, status=404)
+                
+                serializer = CampaignSerializer(campaign, context={'request': request})
+                return Response(serializer.data)
+            
+            # For any other status, return 404
+            return Response({"detail": "Campaign not found"}, status=404)
+            
         except Campaign.DoesNotExist:
             return Response({"detail": "Campaign not found"}, status=404)
         except Exception as e:
@@ -1025,6 +1322,7 @@ class CampaignCategoryChoicesView(APIView):
 class PollListCreateView(APIView):
     """
     List all approved polls or create a new poll (authenticated).
+    Rate limited to 2 polls per hour per user.
     """
     def get(self, request):
         polls = Poll.objects.filter(status="approved").order_by('-created_at')
@@ -1036,19 +1334,29 @@ class PollListCreateView(APIView):
         serializer = PollSerializer(polls, many=True, context={'request': request})
         return Response({"success": True, "polls": serializer.data, "total": len(serializer.data)})
 
+    @method_decorator(ratelimit(key='user', rate='2/h', method='POST'))
     def post(self, request):
-        if not request.user.is_authenticated:
-            return Response({"success": False, "detail": "نیاز به ورود دارید."}, status=403)
-        data = request.data.copy()
-        # جلوگیری از ساخت نظرسنجی شورای عمومی توسط observer
-        if data.get('category') == 'شورای عمومی' and getattr(request.user, 'council_member_status', None) == 'observer':
-            return Response({"success": False, "detail": "شما به عنوان ناظر شورای عمومی مجاز به ایجاد نظرسنجی با این دسته‌بندی نیستید."}, status=403)
-        data['author'] = request.user.id
-        serializer = PollSerializer(data=data, context={'request': request})
-        if serializer.is_valid():
-            poll = serializer.save(status="pending", author=request.user)
-            return Response({"success": True, "poll": PollSerializer(poll, context={'request': request}).data})
-        return Response({"success": False, "errors": serializer.errors}, status=400)
+        try:
+            if not request.user.is_authenticated:
+                return Response({"success": False, "detail": "نیاز به ورود دارید."}, status=403)
+            
+            # Content size validation
+            description = request.data.get('description', '')
+            if len(description) > 10000:
+                return Response({"success": False, "detail": "توضیحات نظرسنجی نباید بیشتر از ۱۰,۰۰۰ کاراکتر باشد"}, status=400)
+            
+            data = request.data.copy()
+            # جلوگیری از ساخت نظرسنجی شورای عمومی توسط observer
+            if data.get('category') == 'شورای عمومی' and getattr(request.user, 'council_member_status', None) == 'observer':
+                return Response({"success": False, "detail": "شما به عنوان ناظر شورای عمومی مجاز به ایجاد نظرسنجی با این دسته‌بندی نیستید."}, status=403)
+            data['author'] = request.user.id
+            serializer = PollSerializer(data=data, context={'request': request})
+            if serializer.is_valid():
+                poll = serializer.save(status="pending", author=request.user)
+                return Response({"success": True, "poll": PollSerializer(poll, context={'request': request}).data})
+            return Response({"success": False, "errors": serializer.errors}, status=400)
+        except Ratelimited:
+            return Response({"success": False, "detail": "شما بیش از حد مجاز نظرسنجی ایجاد کرده‌اید. لطفاً یک ساعت دیگر تلاش کنید."}, status=429)
 
 class PollDetailView(APIView):
     """
@@ -1057,8 +1365,34 @@ class PollDetailView(APIView):
     def get(self, request, poll_id):
         try:
             poll = Poll.objects.get(id=poll_id)
-            serializer = PollSerializer(poll, context={'request': request})
-            return Response({"success": True, "poll": serializer.data})
+            
+            # Check access permissions based on poll status
+            user = request.user
+            
+            # If poll is approved, anyone can view it
+            if poll.status == 'approved':
+                serializer = PollSerializer(poll, context={'request': request})
+                return Response({"success": True, "poll": serializer.data})
+            
+            # If poll is pending or rejected, only author and admins can view it
+            if poll.status in ['pending', 'rejected']:
+                # Check if user is authenticated
+                if not user.is_authenticated:
+                    return Response({"success": False, "detail": "نظرسنجی پیدا نشد"}, status=404)
+                
+                # Check if user is the author or has admin role
+                is_author = poll.author == user
+                is_admin = hasattr(user, 'role') and user.role in ['superadmin', 'head', 'center_member']
+                
+                if not (is_author or is_admin):
+                    return Response({"success": False, "detail": "نظرسنجی پیدا نشد"}, status=404)
+                
+                serializer = PollSerializer(poll, context={'request': request})
+                return Response({"success": True, "poll": serializer.data})
+            
+            # For any other status, return 404
+            return Response({"success": False, "detail": "نظرسنجی پیدا نشد"}, status=404)
+            
         except Poll.DoesNotExist:
             return Response({"success": False, "detail": "نظرسنجی پیدا نشد"}, status=404)
 
@@ -1082,6 +1416,7 @@ class PollVoteView(APIView):
     """
     Vote in a poll (authenticated). Supports single/multiple choice.
     """
+    @method_decorator(ratelimit(key='user', rate='5/m', method='POST'))
     def post(self, request, poll_id):
         if not request.user.is_authenticated:
             return Response({"success": False, "detail": "نیاز به ورود دارید."}, status=403)
@@ -1089,6 +1424,11 @@ class PollVoteView(APIView):
             poll = Poll.objects.get(id=poll_id)
         except Poll.DoesNotExist:
             return Response({"success": False, "detail": "نظرسنجی پیدا نشد"}, status=404)
+        
+        # Check if poll is approved
+        if poll.status != 'approved':
+            return Response({"success": False, "detail": "فقط نظرسنجی‌های تایید شده قابل رای گیری هستند"}, status=400)
+        
         if poll.is_expired():
             return Response({"success": False, "detail": "مهلت رأی دادن به پایان رسیده است."}, status=400)
         # Check if already participated
@@ -1132,9 +1472,33 @@ class PollResultsView(APIView):
             poll = Poll.objects.get(id=poll_id)
         except Poll.DoesNotExist:
             return Response({"success": False, "detail": "نظرسنجی پیدا نشد"}, status=404)
-        # Show results to everyone (since is_public field was removed)
-        serializer = PollSerializer(poll, context={'request': request})
-        return Response({"success": True, "results": serializer.data})
+        
+        # Check access permissions based on poll status
+        user = request.user
+        
+        # If poll is approved, anyone can view results
+        if poll.status == 'approved':
+            serializer = PollSerializer(poll, context={'request': request})
+            return Response({"success": True, "results": serializer.data})
+        
+        # If poll is pending or rejected, only author and admins can view results
+        if poll.status in ['pending', 'rejected']:
+            # Check if user is authenticated
+            if not user.is_authenticated:
+                return Response({"success": False, "detail": "نظرسنجی پیدا نشد"}, status=404)
+            
+            # Check if user is the author or has admin role
+            is_author = poll.author == user
+            is_admin = hasattr(user, 'role') and user.role in ['superadmin', 'head', 'center_member']
+            
+            if not (is_author or is_admin):
+                return Response({"success": False, "detail": "نظرسنجی پیدا نشد"}, status=404)
+            
+            serializer = PollSerializer(poll, context={'request': request})
+            return Response({"success": True, "results": serializer.data})
+        
+        # For any other status, return 404
+        return Response({"success": False, "detail": "نظرسنجی پیدا نشد"}, status=404)
 
 class PollAdminListView(APIView):
     """
@@ -1251,3 +1615,132 @@ class PollStatusUpdateView(APIView):
             return Response({"success": True, "message": f"وضعیت نظرسنجی به {status_val} تغییر یافت"})
         else:
             return Response({"success": False, "detail": "باید status ارسال شود"}, status=400)
+
+
+class UserVotedPollsView(APIView):
+    """
+    Get list of polls that the user has voted on.
+    Returns poll details including the user's vote for non-anonymous polls.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        user = request.user
+        
+        # Get all polls where user has participated
+        participations = PollParticipation.objects.filter(user=user).select_related('poll')
+        
+        voted_polls = []
+        for participation in participations:
+            poll = participation.poll
+            
+            # Get poll details
+            poll_data = {
+                'id': poll.id,
+                'title': poll.title,
+                'description': poll.description,
+                'category': poll.category,
+                'is_multiple_choice': poll.is_multiple_choice,
+                'max_choices': poll.max_choices,
+                'is_anonymous': poll.is_anonymous,
+                'status': poll.status,
+                'deadline': poll.deadline,
+                'created_at': poll.created_at,
+                'total_votes': poll.total_votes,
+                'options': []
+            }
+            
+            # Get poll options with vote counts
+            options = PollOption.objects.filter(poll=poll)
+            for option in options:
+                option_data = {
+                    'id': option.id,
+                    'text': option.text,
+                    'votes_count': option.votes_count
+                }
+                poll_data['options'].append(option_data)
+            
+            # If poll is not anonymous, include user's vote
+            if not poll.is_anonymous:
+                user_votes = PollVote.objects.filter(poll=poll, user=user).select_related('option')
+                user_voted_options = []
+                for vote in user_votes:
+                    user_voted_options.append({
+                        'option_id': vote.option.id,
+                        'option_text': vote.option.text,
+                        'voted_at': vote.voted_at
+                    })
+                poll_data['user_vote'] = user_voted_options
+            else:
+                poll_data['user_vote'] = None
+            
+            voted_polls.append(poll_data)
+        
+        # Sort by most recent vote first
+        voted_polls.sort(key=lambda x: x.get('user_vote', [{}])[0].get('voted_at', x['created_at']) if x.get('user_vote') else x['created_at'], reverse=True)
+        
+        return Response({
+            "success": True,
+            "polls": voted_polls,
+            "total": len(voted_polls)
+        })
+
+class UserCreatedCampaignsView(APIView):
+    """
+    Get list of campaigns created by the user.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        user = request.user
+        try:
+            campaigns = Campaign.objects.filter(author=user).order_by('-created_at')
+            serializer = CampaignSerializer(campaigns, many=True, context={'request': request})
+            
+            return Response({
+                "success": True,
+                "campaigns": serializer.data,
+                "total": len(serializer.data)
+            })
+        except Exception as e:
+            return Response({"success": False, "detail": "خطا در دریافت کارزارهای ایجاد شده"}, status=500)
+
+class UserCreatedBlogPostsView(APIView):
+    """
+    Get list of blog posts created by the user.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        user = request.user
+        try:
+            blog_posts = BlogPost.objects.filter(author=user).order_by('-created_at')
+            serializer = BlogPostListSerializer(blog_posts, many=True, context={'request': request})
+            
+            return Response({
+                "success": True,
+                "blog_posts": serializer.data,
+                "total": len(serializer.data)
+            })
+        except Exception as e:
+            return Response({"success": False, "detail": "خطا در دریافت بلاگ‌های ایجاد شده"}, status=500)
+
+class UserCreatedPollsView(APIView):
+    """
+    Get list of polls created by the user.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        user = request.user
+        try:
+            polls = Poll.objects.filter(author=user).order_by('-created_at')
+            serializer = PollSerializer(polls, many=True, context={'request': request})
+            
+            return Response({
+                "success": True,
+                "polls": serializer.data,
+                "total": len(serializer.data)
+            })
+        except Exception as e:
+            return Response({"success": False, "detail": "خطا در دریافت نظرسنجی‌های ایجاد شده"}, status=500)
