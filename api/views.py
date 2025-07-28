@@ -55,7 +55,7 @@ def check_email(request):
 
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
-@method_decorator(ratelimit(key='ip', rate='5/h', method='POST'))
+@ratelimit(key='ip', rate='5/h', method='POST')
 def send_verification_code(request):
     email = request.data.get('email', '').lower().strip()
     
@@ -127,7 +127,7 @@ def verify_code(request):
 
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
-@method_decorator(ratelimit(key='ip', rate='5/h', method='POST'))
+@ratelimit(key='ip', rate='5/h', method='POST')
 def send_mobile_verification_code(request):
     """Send verification code to mobile phone for existing users"""
     email = request.data.get('email', '').lower().strip()
@@ -220,7 +220,7 @@ def verify_mobile_code(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
-@method_decorator(ratelimit(key='user', rate='3/h', method='POST'))
+@ratelimit(key='user', rate='3/h', method='POST')
 def change_password(request):
     """Change user password with current password verification"""
     current_password = request.data.get('current_password', '').strip()
