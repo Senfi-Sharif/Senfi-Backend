@@ -123,10 +123,21 @@ TIME_ZONE = 'UTC'
 USE_I18N = True
 USE_TZ = True
 
+# Reverse Proxy Configuration
+# Use FORCE_SCRIPT_NAME only when behind a reverse proxy with a path prefix
+# For nginx proxying /api -> backend, set this to '/api' in production
+FORCE_SCRIPT_NAME = os.environ.get('DJANGO_FORCE_SCRIPT_NAME', None)
+
+# Use X-Forwarded-Host header
+USE_X_FORWARDED_HOST = os.environ.get('DJANGO_USE_X_FORWARDED_HOST', 'False').lower() == 'true'
+USE_X_FORWARDED_PORT = os.environ.get('DJANGO_USE_X_FORWARDED_PORT', 'False').lower() == 'true'
+
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
-STATIC_URL = 'static/'
+# Static URL with /api prefix for reverse proxy setup
+# When behind nginx with /api prefix, static files will be at /api/static/
+STATIC_URL = FORCE_SCRIPT_NAME + '/static/' if FORCE_SCRIPT_NAME else '/static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
@@ -222,16 +233,20 @@ SPECTACULAR_SETTINGS = {
     'VERSION': '1.1.0',
     'SERVE_INCLUDE_SCHEMA': False,
     'COMPONENT_SPLIT_REQUEST': True,
-    'SCHEMA_PATH_PREFIX': '/api/',
+    'SCHEMA_PATH_PREFIX': '/',  # Changed from /api/ since nginx handles the /api prefix
     'TAGS': [
         {'name': 'auth', 'description': 'Authentication endpoints'},
         {'name': 'campaigns', 'description': 'Campaign management endpoints'},
         {'name': 'signatures', 'description': 'Campaign signature endpoints'},
         {'name': 'users', 'description': 'User management endpoints'},
+        {'name': 'polls', 'description': 'Poll management endpoints'},
+        {'name': 'blog', 'description': 'Blog post endpoints'},
+        {'name': 'performance', 'description': 'Performance monitoring endpoints'},
     ],
 }
 
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
 
 # Security Headers & HTTPS Settings - Environment-based configuration
 # In development, disable HTTPS requirements to avoid conflicts with Django dev server

@@ -23,10 +23,15 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, Sp
 def api_root(request):
     return JsonResponse({
         "message": "Senfi Django Backend API",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "endpoints": {
-            "admin": "/admin/",
-            "api": "/api/"
+            "auth": "/auth/",
+            "campaigns": "/campaigns/",
+            "polls": "/polls/",
+            "blog": "/blog/",
+            "performance": "/performance/",
+            "docs": "/docs/",
+            "schema": "/schema/"
         }
     })
 
@@ -42,10 +47,12 @@ def admin_host_check(get_response):
 
 urlpatterns = [
     path('', api_root, name='api_root'),
+    # Admin panel - accessible directly (not through /api/ prefix)
     path('admin/', admin.site.urls),
-    path('api/', include('api.urls')),
+    # API endpoints - mounted at root since nginx will proxy /api to this backend
+    path('', include('api.urls')),
     # API Documentation
-    path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
-    path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
-    path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
+    path('schema/', SpectacularAPIView.as_view(), name='schema'),
+    path('docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
+    path('redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
 ]
