@@ -16,7 +16,8 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponseForbidden
+from django.conf import settings
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
 
 def api_root(request):
@@ -28,6 +29,16 @@ def api_root(request):
             "api": "/api/"
         }
     })
+
+def admin_host_check(get_response):
+    def middleware(request):
+        if request.path.startswith('/admin/'):
+            if not settings.DEBUG:
+                allowed_host = getattr(settings, 'ADMIN_ALLOWED_HOST', None)
+                if allowed_host and request.get_host() != allowed_host:
+                    return HttpResponseForbidden("Access denied")
+        return get_response(request)
+    return middleware
 
 urlpatterns = [
     path('', api_root, name='api_root'),

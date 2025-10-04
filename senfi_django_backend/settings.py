@@ -30,7 +30,7 @@ SECRET_KEY = os.environ['DJANGO_SECRET_KEY']
 DEBUG = os.environ.get('DJANGO_DEBUG', 'False').lower() == 'true'
 
 ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "localhost").split(",")
-
+ADMIN_ALLOWED_HOST = os.getenv("ADMIN_ALLOWED_HOST", "admin.senfi-sharif.ir")
 
 # Application definition
 
@@ -52,6 +52,7 @@ MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
+    'senfi_django_backend.urls.admin_host_check',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
