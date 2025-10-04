@@ -16,9 +16,12 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
-from django.http import JsonResponse, HttpResponseForbidden
+from django.http import JsonResponse, HttpResponseForbidden, HttpResponse
 from django.conf import settings
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
+
+def health_check(request):
+    return HttpResponse("OK", status=200)
 
 def api_root(request):
     return JsonResponse({
@@ -45,13 +48,12 @@ def admin_host_check(get_response):
         return get_response(request)
     return middleware
 
-urlpatterns = [
-    path('', include([
-        path('', api_root, name='api_root'),
-        path('admin/', admin.site.urls),
-        path('', include('api.urls')),
-        path('schema/', SpectacularAPIView.as_view(), name='schema'),
-        path('docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
-        path('redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
-    ])),
+urlpatterns = [ 
+    path('', api_root, name='api_root'),
+    path('admin/', admin.site.urls),
+    path('', include('api.urls')),
+    path('schema/', SpectacularAPIView.as_view(), name='schema'),
+    path('docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
+    path('redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
+    path('health/', health_check, name='health_check'),
 ]

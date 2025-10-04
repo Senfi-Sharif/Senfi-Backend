@@ -135,9 +135,10 @@ USE_X_FORWARDED_PORT = os.environ.get('DJANGO_USE_X_FORWARDED_PORT', 'False').lo
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
-STATIC_URL = '/api/static/'
+STATIC_URL = FORCE_SCRIPT_NAME + '/static/' if FORCE_SCRIPT_NAME else '/static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+WHITENOISE_STATIC_PREFIX = '/static/'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
@@ -188,13 +189,13 @@ SIMPLE_JWT = {
 
 # Email backend configuration
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = os.environ.get('EMAIL_SERVER', 'mail.senfi-sharif.ir')
-EMAIL_PORT = int(os.environ.get('EMAIL_PORT') or '587')
+EMAIL_HOST = os.environ.get('EMAIL_HOST', None)
+EMAIL_PORT = int(os.environ.get('EMAIL_PORT','587'))
 EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True').lower() == 'true'
 EMAIL_USE_SSL = os.environ.get('EMAIL_USE_SSL', 'False').lower() == 'true'
-EMAIL_HOST_USER = os.environ.get('EMAIL_USER', 'admin@senfi-sharif.ir')
-EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_PASS')
-DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+EMAIL_HOST_USER = os.environ.get('EMAIL_USER', None)
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_PASS', None)
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', None)
 
 # Email timeout settings
 EMAIL_TIMEOUT = 30  # 30 seconds timeout
@@ -236,7 +237,9 @@ SPECTACULAR_SETTINGS = {
     'VERSION': '1.1.0',
     'SERVE_INCLUDE_SCHEMA': False,
     'COMPONENT_SPLIT_REQUEST': True,
-    'SCHEMA_PATH_PREFIX': '/',  # Changed from /api/ since nginx handles the /api prefix
+    'SERVERS': [
+        {'url': FORCE_SCRIPT_NAME if FORCE_SCRIPT_NAME else '', 'description': 'API Server'},
+    ],
     'TAGS': [
         {'name': 'auth', 'description': 'Authentication endpoints'},
         {'name': 'campaigns', 'description': 'Campaign management endpoints'},

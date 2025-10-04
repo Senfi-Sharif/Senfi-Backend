@@ -48,7 +48,7 @@ EXPOSE 8000
 
 # Add healthcheck to monitor container health
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/', timeout=5)" || exit 1
+    CMD python -c "import urllib.request; req = urllib.request.Request('http://localhost:8000/health/', headers={'X-Forwarded-Proto': 'https'}); urllib.request.urlopen(req, timeout=5).read()" || exit 1
 
 # Use the entrypoint script that runs migrations before starting the server
 ENTRYPOINT ["/docker-entrypoint.sh"]
