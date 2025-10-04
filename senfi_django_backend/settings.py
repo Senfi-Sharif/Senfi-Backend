@@ -135,9 +135,7 @@ USE_X_FORWARDED_PORT = os.environ.get('DJANGO_USE_X_FORWARDED_PORT', 'False').lo
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
-# Static URL with /api prefix for reverse proxy setup
-# When behind nginx with /api prefix, static files will be at /api/static/
-STATIC_URL = 'static/'
+STATIC_URL = '/static_back/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
