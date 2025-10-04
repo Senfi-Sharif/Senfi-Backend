@@ -46,13 +46,12 @@ def admin_host_check(get_response):
     return middleware
 
 urlpatterns = [
-    path('', api_root, name='api_root'),
-    # Admin panel - accessible directly (not through /api/ prefix)
-    path('admin/', admin.site.urls),
-    # API endpoints - mounted at root since nginx will proxy /api to this backend
-    path('', include('api.urls')),
-    # API Documentation
-    path('schema/', SpectacularAPIView.as_view(), name='schema'),
-    path('docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
-    path('redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
+    path('', include([
+        path('', api_root, name='api_root'),
+        path('admin/', admin.site.urls),
+        path('', include('api.urls')),
+        path('schema/', SpectacularAPIView.as_view(), name='schema'),
+        path('docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
+        path('redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
+    ])),
 ]

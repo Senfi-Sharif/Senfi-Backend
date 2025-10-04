@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e
 
+echo "Collecting static files..."
+python manage.py collectstatic --noinput --clear || {
+    echo "Warning: Could not collect static files. Continuing anyway..."
+}
+
 echo "Running database migrations..."
 python manage.py migrate --noinput
 

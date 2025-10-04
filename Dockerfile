@@ -43,9 +43,6 @@ RUN chmod +x /docker-entrypoint.sh && chown -R appuser:appuser /app
 
 USER appuser
 
-# Collect static files using the installed Django from the venv
-RUN DJANGO_SECRET_KEY="dummy-key-for-build-only" python manage.py collectstatic --noinput
-
 # Expose the port the app runs on
 EXPOSE 8000
 
