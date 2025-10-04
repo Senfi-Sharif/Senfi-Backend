@@ -137,7 +137,7 @@ USE_X_FORWARDED_PORT = os.environ.get('DJANGO_USE_X_FORWARDED_PORT', 'False').lo
 
 # Static URL with /api prefix for reverse proxy setup
 # When behind nginx with /api prefix, static files will be at /api/static/
-STATIC_URL = FORCE_SCRIPT_NAME + '/static/' if FORCE_SCRIPT_NAME else '/static/'
+STATIC_URL = 'static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
@@ -145,6 +145,11 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Django-ratelimit configuration
+# Use X-Forwarded-For to get real client IP behind reverse proxy
+RATELIMIT_USE_CACHE = 'default'
+RATELIMIT_IP_META_KEY = 'HTTP_X_FORWARDED_FOR'
 
 # REST Framework settings
 REST_FRAMEWORK = {
