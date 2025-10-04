@@ -16,25 +16,43 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponseForbidden
+from django.conf import settings
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
 
 def api_root(request):
     return JsonResponse({
         "message": "Senfi Django Backend API",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "endpoints": {
-            "admin": "/admin/",
-            "api": "/api/"
+            "auth": "/auth/",
+            "campaigns": "/campaigns/",
+            "polls": "/polls/",
+            "blog": "/blog/",
+            "performance": "/performance/",
+            "docs": "/docs/",
+            "schema": "/schema/"
         }
     })
 
+def admin_host_check(get_response):
+    def middleware(request):
+        if request.path.startswith('/admin/'):
+            if not settings.DEBUG:
+                allowed_host = getattr(settings, 'ADMIN_ALLOWED_HOST', None)
+                if allowed_host and request.get_host() != allowed_host:
+                    return HttpResponseForbidden("Access denied")
+        return get_response(request)
+    return middleware
+
 urlpatterns = [
     path('', api_root, name='api_root'),
+    # Admin panel - accessible directly (not through /api/ prefix)
     path('admin/', admin.site.urls),
-    path('api/', include('api.urls')),
+    # API endpoints - mounted at root since nginx will proxy /api to this backend
+    path('', include('api.urls')),
     # API Documentation
-    path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
-    path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
-    path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
+    path('schema/', SpectacularAPIView.as_view(), name='schema'),
+    path('docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
+    path('redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
 ]

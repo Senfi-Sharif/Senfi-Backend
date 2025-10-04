@@ -1,11 +1,10 @@
 # Environment variables and secrets
 .env
 .env.local
-.env.development
+.env.dev
 .env.test
-.env.production
-*.env
-.env.example
+.env.prod
+!.env.example
 
 # Database files
 *.db
@@ -381,9 +380,6 @@ senfi_django_backend/__pycache__/
 
 # Node modules (if any)
 node_modules/
-
-# Env
-.env*
 
 # Others
 .DS_Store
