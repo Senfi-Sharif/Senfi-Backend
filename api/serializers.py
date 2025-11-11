@@ -20,6 +20,12 @@ class RegisterSerializer(serializers.ModelSerializer):
         model = User
         fields = ['email', 'password']
     
+    def validate_email(self, value):
+        normalized_email = value.strip().lower()
+        if not normalized_email.endswith('@sharif.edu'):
+            raise serializers.ValidationError('ثبت‌نام فقط با ایمیل‌های دامنه sharif.edu امکان‌پذیر است.')
+        return normalized_email
+    
     def validate_password(self, value):
         # Import here to avoid circular imports
         from .validators import PasswordComplexityValidator
