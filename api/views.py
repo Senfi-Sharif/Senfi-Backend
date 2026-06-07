@@ -1,5 +1,6 @@
 from django.shortcuts import render
 from rest_framework import generics, status, permissions
+from django.core.cache import cache
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -36,10 +37,9 @@ security_logger = logging.getLogger('security')
 
 User = get_user_model()
 
-# In-memory store for verification codes (like FastAPI version)
-verification_codes = {}
 # In-memory store for mobile verification codes
 mobile_verification_codes = {}
+
 
 def is_sharif_email(email):
     return email.lower().endswith("@sharif.edu")
@@ -68,8 +68,8 @@ def send_verification_code(request):
     
     if not is_sharif_email(email):
         return Response({"success": False, "detail": "Email must end with @sharif.edu"}, status=400)
-    code = ''.join(random.choices('0123456789', k=6))
-    verification_codes[email] = code
+        code = ''.join(random.choices('0123456789', k=6))
+    cache.set(f"verification_code_{email}", code, timeout=600)  # 10 minutes
     try:
         send_mail(
             'Sharif Verification Code',
@@ -122,8 +122,12 @@ def verify_code(request):
     if not is_sharif_email(email):
         return Response({"valid": False, "detail": "Email must end with @sharif.edu"}, status=400)
     
-    valid = verification_codes.get(email) == code
+        real_code = cache.get(f"verification_code_{email}")
+    valid = real_code == code
+    if valid:
+        cache.delete(f"verification_code_{email}")
     return Response({"valid": valid})
+
 
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
