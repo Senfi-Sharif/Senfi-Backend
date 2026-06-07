@@ -133,7 +133,7 @@ def verify_code(request):
 @permission_classes([permissions.AllowAny])
 @ratelimit(key='ip', rate='5/h', method='POST')
 def send_mobile_verification_code(request):
-    """Send verification code to mobile phone for existing users"""
+    """Send verification code to mobile phone (for login/register, for all users)"""
     email = request.data.get('email', '').lower().strip()
     
     # Input validation
@@ -145,19 +145,9 @@ def send_mobile_verification_code(request):
     
     if not is_sharif_email(email):
         return Response({"success": False, "detail": "Email must end with @sharif.edu"}, status=400)
-    
-    # Check if user exists
-    try:
-        user = User.objects.get(email=email)
-    except User.DoesNotExist:
-        return Response({"success": False, "detail": "User not found"}, status=404)
-    
     # Generate verification code
     code = ''.join(random.choices('0123456789', k=6))
     mobile_verification_codes[email] = code
-    
-    # For now, we'll send the code via email as a fallback
-    # In production, this should be replaced with SMS service
     try:
         send_mail(
             'Sharif Mobile Verification Code',
@@ -166,13 +156,11 @@ def send_mobile_verification_code(request):
             [email],
             fail_silently=False
         )
-        
-        # Log security event
         log_security_event("MOBILE_VERIFICATION_SENT", email, request.META.get("REMOTE_ADDR", "unknown"), success=True)
-        
         return Response({"success": True, "message": "Verification code sent to your email"})
     except Exception as e:
         return Response({"success": False, "detail": f"Failed to send verification code: {str(e)}"}, status=500)
+
 
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
