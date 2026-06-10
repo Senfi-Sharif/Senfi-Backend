@@ -37,8 +37,7 @@ security_logger = logging.getLogger('security')
 
 User = get_user_model()
 
-# In-memory store for mobile verification codes
-mobile_verification_codes = {}
+
 
 
 def is_sharif_email(email):
@@ -68,7 +67,7 @@ def send_verification_code(request):
     
     if not is_sharif_email(email):
         return Response({"success": False, "detail": "Email must end with @sharif.edu"}, status=400)
-        code = ''.join(random.choices('0123456789', k=6))
+    code = ''.join(random.choices('0123456789', k=6))
     cache.set(f"verification_code_{email}", code, timeout=600)  # 10 minutes
     try:
         send_mail(
@@ -121,12 +120,13 @@ def verify_code(request):
     
     if not is_sharif_email(email):
         return Response({"valid": False, "detail": "Email must end with @sharif.edu"}, status=400)
-    
-        real_code = cache.get(f"verification_code_{email}")
+
+    real_code = cache.get(f"verification_code_{email}")
     valid = real_code == code
     if valid:
         cache.delete(f"verification_code_{email}")
     return Response({"valid": valid})
+
 
 
 @api_view(['POST'])
@@ -147,7 +147,7 @@ def send_mobile_verification_code(request):
         return Response({"success": False, "detail": "Email must end with @sharif.edu"}, status=400)
     # Generate verification code
     code = ''.join(random.choices('0123456789', k=6))
-    mobile_verification_codes[email] = code
+    cache.set(f"mobile_verification_code_{email}", code, timeout=600)
     try:
         send_mail(
             'Sharif Mobile Verification Code',
@@ -189,20 +189,17 @@ def verify_mobile_code(request):
         return Response({"success": False, "detail": "User not found"}, status=404)
     
     # Verify code
-    stored_code = mobile_verification_codes.get(email)
+    stored_code = cache.get(f"mobile_verification_code_{email}")
     if not stored_code or stored_code != code:
         log_security_event("MOBILE_VERIFICATION_FAILED", email, request.META.get("REMOTE_ADDR", "unknown"), success=False)
         return Response({"success": False, "detail": "Invalid verification code"}, status=400)
-    
+
     # Code is valid, log in user
     refresh = RefreshToken.for_user(user)
-    
     # Clear the used code
-    mobile_verification_codes.pop(email, None)
-    
+    cache.delete(f"mobile_verification_code_{email}")
     # Log successful mobile login
     log_security_event("MOBILE_LOGIN_SUCCESS", user.email, request.META.get("REMOTE_ADDR", "unknown"), success=True)
-    
     return Response({
         "success": True,
         "token": str(refresh.access_token),
